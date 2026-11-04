@@ -9,7 +9,7 @@
     "start": "node --env-file=../../.env dist/server.js",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test test/app.test.ts",
-    "test:integration": "node --env-file=../../.env --import tsx --test test/database.test.ts"
+    "test:integration": "node --env-file-if-exists=../../.env --import tsx --test test/database.test.ts"
   },
   "dependencies": { "fastify": "5.12.8", "pg": "8.23.1" },
   "devDependencies": { "@types/pg": "8.23.1" }
