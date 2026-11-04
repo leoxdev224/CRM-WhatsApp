@@ -1,0 +1,25 @@
+{
+  "name": "crm-whatsapp",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": ["apps/api", "apps/web"],
+  "engines": { "node": ">=26.8.1 <27", "npm": ">=11" },
+  "scripts": {
+    "dev": "concurrently --kill-others --names api,web \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "npm run dev --workspace=@crm-whatsapp/api",
+    "dev:web": "npm run dev --workspace=@crm-whatsapp/web",
+    "build": "npm run build --workspaces",
+    "typecheck": "npm run typecheck --workspaces",
+    "test": "npm run test --workspaces",
+    "check": "npm run typecheck && npm test && npm run build",
+    "db:up": "docker compose up -d --wait postgres",
+    "db:down": "docker compose down",
+    "db:check": "npm run test:integration --workspace=@crm-whatsapp/api"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "concurrently": "10.0.6",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2"
+  }
+}

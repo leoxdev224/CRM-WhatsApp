@@ -1,0 +1,21 @@
+name: crm-whatsapp
+
+services:
+  postgres:
+    image: postgres:18-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5
+    environment:
+      POSTGRES_DB: ${PGDATABASE:?Copiar .env.example a .env}
+      POSTGRES_USER: ${PGUSER:?Configurar PGUSER en .env}
+      POSTGRES_PASSWORD: ${PGPASSWORD:?Configurar PGPASSWORD en .env}
+    ports:
+      - "127.0.0.1:${PGPORT:-15432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  postgres_data:
