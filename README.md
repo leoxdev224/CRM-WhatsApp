@@ -49,6 +49,10 @@ La pantalla inicial incluye un enlace a `/api/ready` a través del proxy de Vite
 
 Antes de preparar un commit, ejecutar `npm run check` y, con Docker iniciado, `npm run db:check`.
 
+## Integración continua
+
+GitHub Actions ejecuta el mismo control en cada `push` y `pull request`: instala las dependencias con `npm ci`, ejecuta `npm run check` y comprueba la conexión de la API con una instancia temporal de PostgreSQL. La configuración está en `.github/workflows/ci.yml`; no usa el archivo `.env` ni credenciales locales.
+
 Para comprobar la API compilada: `npm run start --workspace=@crm-whatsapp/api`. Para inspeccionar los archivos compilados de React: `npm run preview --workspace=@crm-whatsapp/web`. El preview solo sirve el frontend estático; el proxy `/api` está configurado para desarrollo. Un despliegue necesitará servir `/api` desde el mismo origen o configurar su proxy.
 
 ## Variables de entorno
