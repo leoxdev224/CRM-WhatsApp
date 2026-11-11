@@ -1,10 +1,14 @@
 # Modelo de datos inicial (WIP)
 
-Este esquema cubre el flujo mínimo de una bandeja de WhatsApp con varios números conectados. Está pensado como punto de partida: no modela todavía campañas, automatizaciones, adjuntos almacenados ni historial de asignaciones.
+Este esquema cubre el flujo mínimo de una bandeja de WhatsApp con varios números conectados y varias empresas. CityWin es la organización inicial. Está pensado como punto de partida: no modela todavía campañas, automatizaciones, adjuntos almacenados ni historial de asignaciones.
 
 ## Relaciones
 
 ```text
+organizations ──< users
+organizations ──< channel_accounts
+organizations ──< contacts
+organizations ──< conversations
 users ──< channel_accounts
 users ──< conversations (asignado)
 channel_accounts ──< contact_identities >── contacts
@@ -16,10 +20,11 @@ conversations ──< messages
 
 ## Pertenencia y deduplicación
 
-- Una `channel_account` representa un número de WhatsApp conectado. Su número normalizado es único y su identificador externo, si existe, también lo es dentro del proveedor.
-- Cada `conversation` pertenece a una cuenta conectada, a un contacto y a su `external_id`. La pareja `(channel_account_id, external_id)` es única.
-- Cada `message` conserva su `channel_account_id` y su `provider_message_id`, únicos en conjunto. Una clave foránea compuesta obliga a que el mensaje y la conversación pertenezcan a la misma cuenta de origen.
-- Las identidades de contacto usan la pareja `(channel_account_id, external_id)` para evitar duplicados al importar chats.
+- Cada registro operativo pertenece obligatoriamente a una `organization`. Las futuras consultas de la API deben filtrar siempre por la organización de la sesión.
+- Una `channel_account` representa un número de WhatsApp conectado. Su número normalizado y su identificador externo, si existe, son únicos dentro de una organización.
+- Cada `conversation` pertenece a una organización, una cuenta conectada, un contacto y su `external_id`. La terna `(organization_id, channel_account_id, external_id)` es única.
+- Cada `message` conserva su organización, `channel_account_id` y su `provider_message_id`, únicos en conjunto. Una clave foránea compuesta obliga a que el mensaje y la conversación pertenezcan a la misma cuenta y organización de origen.
+- Las identidades de contacto usan la terna `(organization_id, channel_account_id, external_id)` para evitar duplicados al importar chats y las claves foráneas compuestas impiden mezclar contactos o cuentas de organizaciones distintas.
 
 ## Estados iniciales
 
