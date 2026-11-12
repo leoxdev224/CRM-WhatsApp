@@ -8,10 +8,12 @@
     "build": "tsc -p tsconfig.build.json",
     "start": "node --env-file=../../.env dist/server.js",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test test/app.test.ts",
+    "test": "node --import tsx --test test/app.test.ts test/password.test.ts test/totp.test.ts",
     "migrate": "node --env-file-if-exists=../../.env --import tsx src/database/migrate.ts",
     "seed": "node --env-file-if-exists=../../.env --import tsx src/database/seed.ts",
-    "test:integration": "node --env-file-if-exists=../../.env --import tsx --test test/database.test.ts"
+    "set-password": "node --env-file-if-exists=../../.env --import tsx src/auth/set-password.ts",
+    "enroll-mfa": "node --env-file-if-exists=../../.env --import tsx src/auth/enroll-mfa.ts",
+    "test:integration": "node --env-file-if-exists=../../.env --import tsx --test test/database.test.ts test/auth.integration.test.ts"
   },
   "dependencies": { "fastify": "5.12.8", "pg": "8.23.1" },
   "devDependencies": { "@types/pg": "8.23.1" }

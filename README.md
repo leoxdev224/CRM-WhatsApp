@@ -58,6 +58,34 @@ GitHub Actions ejecuta el mismo control en cada `push` y `pull request`: instala
 
 Para comprobar la API compilada: `npm run start --workspace=@crm-whatsapp/api`. Para inspeccionar los archivos compilados de React: `npm run preview --workspace=@crm-whatsapp/web`. El preview solo sirve el frontend estático; el proxy `/api` está configurado para desarrollo. Un despliegue necesitará servir `/api` desde el mismo origen o configurar su proxy.
 
+## Acceso de desarrollo
+
+Los usuarios ficticios no tienen contraseña inicial. Después de `npm run db:seed`, asigná una contraseña local al administrador desde PowerShell (no uses datos reales):
+
+```powershell
+$env:CRM_USER_EMAIL = 'admin@example.test'
+$env:CRM_USER_PASSWORD = Read-Host 'Contraseña local (mínimo 12 caracteres)'
+npm run set-password --workspace=@crm-whatsapp/api
+Remove-Item Env:CRM_USER_PASSWORD
+Remove-Item Env:CRM_USER_EMAIL
+```
+
+`Read-Host` muestra lo escrito en pantalla; usalo únicamente para desarrollo local. El comando actualiza el hash y revoca las sesiones anteriores. El formulario de acceso conserva el token en memoria; al recargar se debe ingresar otra vez. Los tokens vencen a las ocho horas y el cierre de sesión los revoca.
+
+Los administradores requieren doble factor TOTP con una aplicación autenticadora. Configurá primero `MFA_ENCRYPTION_KEY` en `.env` con una clave aleatoria de 32 bytes en hexadecimal (por ejemplo, generada localmente con `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`). La clave es un secreto: no la compartas ni la subas a Git. Conservá una copia segura; si se pierde o cambia, habrá que volver a configurar el segundo factor de cada administrador. Reiniciá la API después de configurarla.
+
+Para registrar o restablecer el segundo factor de un administrador, desde una terminal privada y confiable:
+
+```powershell
+$env:CRM_USER_EMAIL = 'admin@example.test'
+npm run enroll-mfa --workspace=@crm-whatsapp/api
+Remove-Item Env:CRM_USER_EMAIL
+```
+
+El comando muestra una clave secreta para agregar manualmente en la aplicación autenticadora y pide confirmar un código antes de activarla; no compartas la pantalla ni la salida. Una vez activado, esperá al siguiente código para iniciar sesión: cada código se acepta una sola vez. El restablecimiento requiere acceso administrativo al servidor y revoca las sesiones existentes. No hay recuperación automática.
+
+Los administradores pueden consultar canales y los operadores pueden consultar conversaciones de su organización. La API aplica estas reglas en el servidor; futuras rutas deben aplicar el mismo control. Antes de publicar se requiere HTTPS y una revisión de seguridad y de límites de intentos a nivel de infraestructura.
+
 ## Variables de entorno
 
 Un único archivo `.env` en la raíz alimenta Docker Compose y la API. Vite lo lee para configurar su proxy en el servidor de desarrollo.
@@ -71,6 +99,7 @@ Un único archivo `.env` en la raíz alimenta Docker Compose y la API. Vite lo l
 | `PGPASSWORD` | Contraseña exclusivamente local; valor ficticio en el ejemplo. | Ver `.env.example`. |
 | `API_HOST` | Dirección donde escucha la API y a la que apunta el proxy. | `127.0.0.1` |
 | `API_PORT` | Puerto de la API. | `3002` |
+| `MFA_ENCRYPTION_KEY` | Clave persistente de 32 bytes en hexadecimal para cifrar secretos TOTP. | Generar localmente; nunca versionar. |
 
 - `.env` está excluido de Git; versionar únicamente `.env.example` con valores ficticios.
 - Las variables con prefijo `VITE_` se publican en el navegador: nunca poner contraseñas, tokens ni credenciales bajo ese prefijo.

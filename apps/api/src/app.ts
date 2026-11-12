@@ -1,5 +1,6 @@
 import Fastify from 'fastify';
 import type { Pool } from 'pg';
+import { registerAuth } from './auth/routes.js';
 
 export function buildApp(pool: Pool) {
   const app = Fastify({ logger: true });
@@ -9,6 +10,7 @@ export function buildApp(pool: Pool) {
   });
 
   app.get('/api/health', async () => ({ status: 'ok' }));
+  registerAuth(app, pool);
 
   app.get('/api/ready', async (request, reply) => {
     try {
