@@ -1,0 +1,50 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { randomUUID } from 'node:crypto';
+import pg from 'pg';
+import { buildApp } from '../src/app.js';
+import { hashPassword } from '../src/auth/password.js';
+import { codeAt, createSecret, encryptSecret } from '../src/auth/totp.js';
+
+test('sesiones y permisos aíslan organizaciones y roles', async (t) => {
+  const pool = new pg.Pool({ connectionTimeoutMillis: 3000 });
+  const app = buildApp(pool);
+  const org = randomUUID();
+  const operator = randomUUID();
+  const admin = randomUUID();
+  const email = `${operator}@example.test`;
+  const adminEmail = `${admin}@example.test`;
+  const password = 'contraseña larga de prueba';
+  process.env.MFA_ENCRYPTION_KEY = 'bb'.repeat(32);
+  t.after(async () => {
+    await pool.query('DELETE FROM users WHERE id = ANY($1::uuid[])', [[operator, admin]]);
+    await pool.query('DELETE FROM organizations WHERE id = $1', [org]);
+    await app.close();
+  });
+  await pool.query('INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3)', [org, 'Test', org]);
+  const hash = await hashPassword(password);
+  await pool.query(`INSERT INTO users (id, organization_id, email, display_name, role, password_hash)
+    VALUES ($1,$3,$4,'Operador','operator',$6), ($2,$3,$5,'Admin','admin',$6)`, [operator, admin, org, email, adminEmail, hash]);
+  assert.equal((await app.inject({ method: 'GET', url: '/api/conversations' })).statusCode, 401);
+  assert.equal((await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email, password: 'incorrecta' } })).statusCode, 401);
+  const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email, password } });
+  assert.equal(login.statusCode, 200);
+  const token = login.json().token as string;
+  const headers = { authorization: `Bearer ${token}` };
+  assert.deepEqual((await app.inject({ method: 'GET', url: '/api/conversations', headers })).json(), { conversations: [] });
+  assert.equal((await app.inject({ method: 'GET', url: '/api/channels', headers })).statusCode, 403);
+  assert.equal((await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: adminEmail, password } })).statusCode, 401);
+  const secret = createSecret();
+  await pool.query('UPDATE users SET mfa_secret_encrypted = $1 WHERE id = $2', [encryptSecret(secret), admin]);
+  assert.equal((await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: adminEmail, password, code: 'invalid' } })).statusCode, 401);
+  const code = codeAt(secret, Math.floor(Date.now() / 30000));
+  const adminLogin = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: adminEmail, password, code } });
+  assert.equal(adminLogin.statusCode, 200);
+  assert.equal((await app.inject({ method: 'GET', url: '/api/channels', headers: { authorization: `Bearer ${adminLogin.json().token}` } })).statusCode, 200);
+  assert.equal((await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: adminEmail, password, code } })).statusCode, 401);
+  await pool.query("UPDATE users SET role = 'admin', mfa_secret_encrypted = $1 WHERE id = $2", [encryptSecret(secret), operator]);
+  assert.equal((await app.inject({ method: 'GET', url: '/api/channels', headers })).statusCode, 401);
+  await pool.query("UPDATE users SET role = 'operator' WHERE id = $1", [operator]);
+  assert.equal((await app.inject({ method: 'POST', url: '/api/auth/logout', headers })).statusCode, 204);
+  assert.equal((await app.inject({ method: 'GET', url: '/api/conversations', headers })).statusCode, 401);
+});
