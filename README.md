@@ -18,6 +18,7 @@ Desde la raíz del repositorio:
 Copy-Item .env.example .env
 npm ci
 npm run db:up
+npm run db:seed
 npm run db:check
 npm run dev
 ```
@@ -44,7 +45,9 @@ La pantalla inicial incluye un enlace a `/api/ready` a través del proxy de Vite
 | `npm run build` | Compila API y frontend a sus directorios `dist/`. |
 | `npm run check` | Ejecuta revisión de tipos, pruebas y compilación. |
 | `npm run db:up` | Inicia PostgreSQL y espera a que esté saludable. |
-| `npm run db:check` | Prueba la API con PostgreSQL real y la liberación del pool al apagar. |
+| `npm run db:migrate` | Aplica las migraciones SQL pendientes. |
+| `npm run db:seed` | Aplica migraciones y carga datos ficticios de desarrollo repetibles. |
+| `npm run db:check` | Aplica migraciones y datos ficticios; prueba la API con PostgreSQL real y la liberación del pool al apagar. |
 | `npm run db:down` | Detiene los contenedores sin eliminar los datos. |
 
 Antes de preparar un commit, ejecutar `npm run check` y, con Docker iniciado, `npm run db:check`.
@@ -80,9 +83,12 @@ Un único archivo `.env` en la raíz alimenta Docker Compose y la API. Vite lo l
 ```text
 apps/api/       API Fastify, conexión con pg y pruebas
 apps/web/       React con Vite, TypeScript y prueba de renderizado
+apps/api/db/    Migraciones SQL y datos ficticios de desarrollo
 compose.yaml    PostgreSQL 18 con imagen fijada por digest y volumen persistente
 .env.example    Plantilla local sin secretos reales
 ```
+
+El modelo inicial, sus estados y reglas de pertenencia están en [docs/data-model.md](docs/data-model.md).
 
 PostgreSQL conserva los datos en el volumen `crm-whatsapp_postgres_data`. `npm run db:down` lo conserva. No usar `docker compose down -v` salvo que se quiera **borrar deliberadamente** la base local.
 

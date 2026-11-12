@@ -14,7 +14,9 @@
     "check": "npm run typecheck && npm test && npm run build",
     "db:up": "docker compose up -d --wait postgres",
     "db:down": "docker compose down",
-    "db:check": "npm run test:integration --workspace=@crm-whatsapp/api"
+    "db:migrate": "npm run migrate --workspace=@crm-whatsapp/api",
+    "db:seed": "npm run db:migrate && npm run seed --workspace=@crm-whatsapp/api",
+    "db:check": "npm run db:seed && npm run test:integration --workspace=@crm-whatsapp/api"
   },
   "devDependencies": {
     "@types/node": "26.6.6",
