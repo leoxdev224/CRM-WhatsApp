@@ -13,3 +13,44 @@ a:focus-visible { outline: 3px solid #166347; outline-offset: 4px; }
 form { display: grid; gap: 1rem; max-width: 24rem; }
 label { display: grid; gap: .25rem; }
 input, button { font: inherit; padding: .6rem; }
+
+.workspace { max-width: 76rem; margin: 2rem auto 5rem; }
+.workspace > h1 { font-size: 1.8rem; margin: 0; }
+.workspace > p { display: inline-block; margin-right: 1rem; }
+.workspace button, .workspace input, .workspace select { font: inherit; }
+.workspace button { cursor: pointer; }
+.workspace button:disabled { cursor: default; opacity: .55; }
+.workspace :focus-visible { outline: 3px solid #237a59; outline-offset: 2px; }
+.inbox { background: #fff; border: 1px solid #d4dfda; border-radius: 12px; margin-top: 2rem; overflow: hidden; }
+.inbox-header { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: 1.5rem 1.5rem 1rem; }
+.inbox-header h2 { margin: 0; font-size: 1.45rem; }
+.inbox-header p { color: #52665d; margin: .2rem 0 0; }
+.inbox-live { color: #226a4d; font-size: .85rem; white-space: nowrap; }
+.inbox-filters { display: grid; grid-template-columns: 1.5fr repeat(3, 1fr); gap: .75rem; padding: 0 1.5rem 1.25rem; }
+.inbox-filters label { color: #42594e; font-size: .85rem; font-weight: 600; min-width: 0; }
+.inbox-filters input, .inbox-filters select { box-sizing: border-box; width: 100%; min-width: 0; border: 1px solid #b9cac1; border-radius: 6px; background: white; color: #182923; padding: .55rem; }
+.conversation-list { list-style: none; margin: 0; padding: 0; }
+.conversation-row { border-top: 1px solid #e0e8e3; padding: 1rem 1.5rem; }
+.conversation-row:hover { background: #f7faf8; }
+.conversation-primary, .conversation-meta { display: flex; justify-content: space-between; align-items: baseline; gap: .75rem; }
+.conversation-primary strong { overflow-wrap: anywhere; }
+.conversation-time, .contact-phone { color: #52665d; font-size: .85rem; white-space: nowrap; }
+.conversation-preview { margin: .15rem 0 .4rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conversation-meta { justify-content: flex-start; flex-wrap: wrap; color: #52665d; font-size: .85rem; }
+.conversation-status { color: #155d40; background: #e7f3eb; border-radius: 4px; padding: .05rem .45rem; font-weight: 600; }
+.contact-phone { display: block; }
+.inbox-empty, .inbox-error { margin: 0; padding: 1.5rem; border-top: 1px solid #e0e8e3; }
+.inbox-error { color: #9b302b; }
+.inbox-error button { padding: .2rem .45rem; }
+.inbox-pagination { display: flex; justify-content: flex-end; align-items: center; gap: .75rem; padding: 1rem 1.5rem; border-top: 1px solid #e0e8e3; }
+.inbox-pagination button { background: white; border: 1px solid #b9cac1; border-radius: 6px; padding: .35rem .7rem; }
+.channel-settings { margin-top: 1.5rem; }
+.channel-settings summary { cursor: pointer; font-weight: 600; }
+@media (max-width: 760px) {
+  .workspace { margin: 0 auto 3rem; padding: 1rem; }
+  .inbox-header { align-items: flex-start; flex-direction: column; }
+  .inbox-filters { grid-template-columns: 1fr 1fr; }
+  .inbox-search { grid-column: 1 / -1; }
+  .conversation-primary { align-items: flex-start; }
+}
+@media (max-width: 380px) { .inbox-filters { grid-template-columns: 1fr; } .inbox-search { grid-column: auto; } }

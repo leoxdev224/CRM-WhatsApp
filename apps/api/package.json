@@ -13,7 +13,7 @@
     "seed": "node --env-file-if-exists=../../.env --import tsx src/database/seed.ts",
     "set-password": "node --env-file-if-exists=../../.env --import tsx src/auth/set-password.ts",
     "enroll-mfa": "node --env-file-if-exists=../../.env --import tsx src/auth/enroll-mfa.ts",
-    "test:integration": "node --env-file-if-exists=../../.env --import tsx --test test/database.test.ts test/auth.integration.test.ts test/ingestion.integration.test.ts"
+    "test:integration": "node --env-file-if-exists=../../.env --import tsx --test test/database.test.ts test/auth.integration.test.ts test/ingestion.integration.test.ts test/inbox.integration.test.ts"
   },
   "dependencies": {
     "@types/qrcode": "1.5.6",
