@@ -70,7 +70,7 @@ Remove-Item Env:CRM_USER_PASSWORD
 Remove-Item Env:CRM_USER_EMAIL
 ```
 
-`Read-Host` muestra lo escrito en pantalla; usalo únicamente para desarrollo local. El comando actualiza el hash y revoca las sesiones anteriores. El formulario de acceso conserva el token en memoria; al recargar se debe ingresar otra vez. Los tokens vencen a las ocho horas y el cierre de sesión los revoca.
+`Read-Host` muestra lo escrito en pantalla; usalo únicamente para desarrollo local. El comando actualiza el hash y revoca las sesiones anteriores. El formulario conserva el token en el almacenamiento de la pestaña para mantener la sesión al recargar; al cerrar la pestaña se pierde. Los tokens vencen a las ocho horas y el cierre de sesión los revoca. El token es accesible al JavaScript de la página, por lo que debe protegerse la aplicación contra scripts no confiables antes de usarla en producción.
 
 Los administradores requieren doble factor TOTP con una aplicación autenticadora. Configurá primero `MFA_ENCRYPTION_KEY` en `.env` con una clave aleatoria de 32 bytes en hexadecimal (por ejemplo, generada localmente con `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`). La clave es un secreto: no la compartas ni la subas a Git. Conservá una copia segura; si se pierde o cambia, habrá que volver a configurar el segundo factor de cada administrador. Reiniciá la API después de configurarla.
 
@@ -119,7 +119,7 @@ Esta integración usa una biblioteca no oficial; puede fallar si cambia WhatsApp
 
 Si se intenta conectar un número ya registrado en otro canal de la misma organización, el CRM rechaza el duplicado y solicita desvincular esa segunda sesión. Comprobá en **Dispositivos vinculados** del teléfono que no haya quedado un dispositivo duplicado: el servidor no puede garantizar la confirmación remota de la baja. Si falla la limpieza, el aviso indica que hace falta revisión manual.
 
-La implementación permite una sola instancia de la API administrando sesiones de WhatsApp a la vez. Los canales marcados como ejemplos son ficticios. No se implementan todavía la importación de historial, los mensajes ni la bandeja unificada. Para probar la recepción de un QR sin vincular una cuenta: `node --env-file=.env --import tsx --test apps/api/test/whatsapp.live.test.ts` (requiere PostgreSQL y acceso a WhatsApp).
+La implementación permite una sola instancia de la API administrando sesiones de WhatsApp a la vez. Los canales marcados como ejemplos son ficticios. La recepción y el guardado de mensajes están descritos en [ingesta de WhatsApp Web](docs/whatsapp-ingestion.md); todavía no hay bandeja unificada ni importación garantizada del historial. Para probar la recepción de un QR sin vincular una cuenta: `node --env-file=.env --import tsx --test apps/api/test/whatsapp.live.test.ts` (requiere PostgreSQL y acceso a WhatsApp).
 
 ## Organización
 

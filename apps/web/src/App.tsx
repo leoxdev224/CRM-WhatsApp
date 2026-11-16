@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
+import { restoreSession, sessionKey } from './session.js';
+
+function sessionStorageOrNull(): Storage | null {
+  try { return typeof window === 'undefined' ? null : window.sessionStorage; } catch { return null; }
+}
+
+function hasSavedSession() {
+  try { return !!sessionStorageOrNull()?.getItem(sessionKey); } catch { return false; }
+}
 
 type Channel = { id: string; phone_number: string | null; display_name: string; connection_status: string; connection_type?: string };
 
@@ -92,6 +101,22 @@ export function App() {
   const refreshChannels = useCallback(async () => { setRevision((value) => value + 1); }, []);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [restoring, setRestoring] = useState(hasSavedSession);
+  const [restoreError, setRestoreError] = useState(false);
+  const [restoreAttempt, setRestoreAttempt] = useState(0);
+
+  useEffect(() => {
+    if (!restoring) return;
+    const storage = sessionStorageOrNull();
+    if (!storage) { setRestoring(false); return; }
+    let cancelled = false;
+    void restoreSession(storage).then((session) => {
+      if (cancelled) return;
+      if (session) { setToken(session.token); setName(session.name); setRole(session.role); }
+      setRestoring(false);
+    }).catch(() => { if (!cancelled) { setRestoreError(true); setRestoring(false); } });
+    return () => { cancelled = true; };
+  }, [restoring, restoreAttempt]);
 
   useEffect(() => {
     if (!token || role !== 'admin') return;
@@ -117,6 +142,12 @@ export function App() {
       });
       if (!response.ok) throw new Error(response.status === 429 ? 'Demasiados intentos. Intentalo más tarde.' : 'No se pudo iniciar sesión. Revisá tus datos.');
       const data = await response.json() as { token: string; user: { displayName: string; role: string } };
+      try {
+        const storage = sessionStorageOrNull();
+        if (!storage) throw new Error();
+        storage.setItem(sessionKey, data.token);
+      }
+      catch { setError('No se pudo guardar la sesión en esta pestaña; deberás ingresar de nuevo al recargar.'); }
       setToken(data.token);
       setName(data.user.displayName);
       setRole(data.user.role);
@@ -130,6 +161,7 @@ export function App() {
     try {
       const response = await fetch('/api/auth/logout', { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
       if (!response.ok && response.status !== 401) throw new Error();
+      try { sessionStorageOrNull()?.removeItem(sessionKey); } catch { /* El servidor ya revocó la sesión. */ }
       setToken(null);
       setName('');
       setRole('');
@@ -140,7 +172,7 @@ export function App() {
   return (
     <main>
       <h1>CRM WhatsApp</h1>
-      {token ? <><p>Sesión iniciada: {name}</p><button type="button" onClick={logout}>Cerrar sesión</button>
+      {restoring ? <p role="status">Recuperando sesión…</p> : restoreError ? <><p role="alert">No se pudo comprobar la sesión. Revisá la conexión.</p><button type="button" onClick={() => { setRestoreError(false); setRestoring(true); setRestoreAttempt((value) => value + 1); }}>Reintentar</button></> : token ? <><p>Sesión iniciada: {name}</p><button type="button" onClick={logout}>Cerrar sesión</button>
         {role === 'admin' && (channelError ? <p role="alert">{channelError}</p> : channels ? <><ChannelList channels={channels} /><ChannelManager token={token} channels={channels} refresh={refreshChannels} /></> : <p role="status">Cargando canales…</p>)}
       </> : (
         <form onSubmit={login}>

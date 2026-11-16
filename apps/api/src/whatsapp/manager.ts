@@ -4,6 +4,8 @@ import type { Pool, PoolClient } from 'pg';
 import pino from 'pino';
 import { createAuthStore } from './store.js';
 import { claimAccount } from './claim.js';
+import type { WhatsAppIngestion } from './ingestion.js';
+import type { WAMessage, WAMessageUpdate } from '@whiskeysockets/baileys';
 
 type Entry = { socket?: WASocket; qr: string | null; qrAt: number; state: 'starting' | 'qr' | 'connected' | 'disconnected' | 'duplicate' | 'duplicate_cleanup_failed'; saving: Promise<void> };
 
@@ -11,7 +13,7 @@ export class WhatsAppManager {
   private entries = new Map<string, Entry>();
   private lock: PoolClient | null = null;
   private locking: Promise<void> | null = null;
-  constructor(private pool: Pool) {}
+  constructor(private pool: Pool, private ingestion?: WhatsAppIngestion, private reportError: (code: string) => void = () => {}) {}
 
   get(id: string) { const entry = this.entries.get(id); return { state: entry?.state ?? 'disconnected', qr: entry && Date.now() - entry.qrAt < 60000 ? entry.qr : null }; }
 
@@ -49,6 +51,22 @@ export class WhatsAppManager {
       const auth = await createAuthStore(this.pool, id);
       const socket = makeWASocket({ auth: auth.state, logger: pino({ level: 'silent' }), syncFullHistory: false });
       entry.socket = socket;
+      const pending: Array<{ type: 'messages'; data: WAMessage[] } | { type: 'statuses'; data: WAMessageUpdate[] }> = [];
+      const deliver = (event: (typeof pending)[number]) => {
+        if (!this.ingestion) return;
+        const promise = event.type === 'messages' ? this.ingestion.messages(id, event.data) : this.ingestion.statuses(id, event.data);
+        void promise.catch(() => this.reportError('whatsapp_event_enqueue_failed'));
+      };
+      const receive = (event: (typeof pending)[number]) => {
+        if (this.entries.get(id) !== entry) return;
+        if (entry.state === 'connected') deliver(event);
+        else if (entry.state === 'starting' || entry.state === 'qr') {
+          if (pending.length < 500) pending.push(event);
+          else this.reportError('whatsapp_event_buffer_full');
+        }
+      };
+      socket.ev.on('messages.upsert', ({ messages }) => receive({ type: 'messages', data: messages }));
+      socket.ev.on('messages.update', (updates) => receive({ type: 'statuses', data: updates }));
       socket.ev.on('creds.update', () => {
         entry.saving = entry.saving.then(auth.saveCreds).catch(() => { entry.state = 'disconnected'; entry.qr = null; void socket.end(new Error('No se pudo guardar la sesión')).catch(() => {}); });
       });
@@ -64,7 +82,7 @@ export class WhatsAppManager {
             entry.state = 'duplicate';
             await socket.logout();
             await entry.saving;
-          }).then((result) => { entry.state = result; }).catch(() => {
+          }).then((result) => { if (this.entries.get(id) !== entry) return; entry.state = result; if (result === 'connected') for (const event of pending.splice(0)) deliver(event); else pending.length = 0; }).catch(() => {
             entry.state = 'disconnected';
             void socket.end(new Error('No se pudo guardar el estado')).catch(() => {});
           });
