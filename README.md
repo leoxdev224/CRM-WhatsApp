@@ -70,7 +70,7 @@ Remove-Item Env:CRM_USER_PASSWORD
 Remove-Item Env:CRM_USER_EMAIL
 ```
 
-`Read-Host` muestra lo escrito en pantalla; usalo únicamente para desarrollo local. El comando actualiza el hash y revoca las sesiones anteriores. El formulario de acceso conserva el token en memoria; al recargar se debe ingresar otra vez. Los tokens vencen a las ocho horas y el cierre de sesión los revoca.
+`Read-Host` muestra lo escrito en pantalla; usalo únicamente para desarrollo local. El comando actualiza el hash y revoca las sesiones anteriores. El formulario conserva el token en el almacenamiento de la pestaña para mantener la sesión al recargar; al cerrar la pestaña se pierde. Los tokens vencen a las ocho horas y el cierre de sesión los revoca. El token es accesible al JavaScript de la página, por lo que debe protegerse la aplicación contra scripts no confiables antes de usarla en producción.
 
 Los administradores requieren doble factor TOTP con una aplicación autenticadora. Configurá primero `MFA_ENCRYPTION_KEY` en `.env` con una clave aleatoria de 32 bytes en hexadecimal (por ejemplo, generada localmente con `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`). La clave es un secreto: no la compartas ni la subas a Git. Conservá una copia segura; si se pierde o cambia, habrá que volver a configurar el segundo factor de cada administrador. Reiniciá la API después de configurarla.
 
