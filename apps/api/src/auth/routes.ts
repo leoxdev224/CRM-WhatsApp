@@ -5,6 +5,7 @@ import { verifyPassword } from './password.js';
 import { decryptSecret, verifyCode } from './totp.js';
 import QRCode from 'qrcode';
 import type { WhatsAppManager } from '../whatsapp/manager.js';
+import { generateMessageIDV2 } from '@whiskeysockets/baileys';
 
 type Principal = { id: string; organization_id: string; role: 'admin' | 'operator'; display_name: string };
 declare module 'fastify' { interface FastifyRequest { principal: Principal | null } }
@@ -119,6 +120,61 @@ export function registerAuth(app: FastifyInstance, pool: Pool, whatsapp: WhatsAp
       pool.query("SELECT id,display_name FROM users WHERE organization_id=$1 AND status='active' ORDER BY display_name,id", [org]),
     ]);
     return { channels: channels.rows, operators: operators.rows };
+  });
+  app.get('/api/conversations/:id/messages', { preHandler: authenticate }, async (request, reply) => {
+    const id = (request.params as { id: string }).id;
+    const { before = '' } = request.query as { before?: string };
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuid.test(id) || typeof before !== 'string' || (before !== '' && !uuid.test(before))) return reply.code(400).send({ error: 'Solicitud inválida' });
+    const org = request.principal!.organization_id;
+    const conversation = await pool.query(`SELECT c.id,c.kind,c.status,COALESCE(contact.display_name,c.external_id) AS contact_name,
+      a.display_name AS channel_name,a.phone_number AS channel_phone,a.connection_type
+      FROM conversations c JOIN channel_accounts a ON a.id=c.channel_account_id AND a.organization_id=c.organization_id
+      LEFT JOIN contacts contact ON contact.id=c.contact_id AND contact.organization_id=c.organization_id
+      WHERE c.id=$1 AND c.organization_id=$2`, [id, org]);
+    if (!conversation.rowCount) return reply.code(404).send({ error: 'Conversación no encontrada' });
+    const messages = await pool.query(`SELECT id,direction,message_type,body,occurred_at,sender_external_id,delivery_status,send_state
+      FROM messages WHERE conversation_id=$1 AND organization_id=$2 AND ($3='' OR (occurred_at,id) <
+        (SELECT anchor.occurred_at,anchor.id FROM messages anchor WHERE anchor.id::text=$3 AND anchor.conversation_id=$1 AND anchor.organization_id=$2))
+      ORDER BY occurred_at DESC,id DESC LIMIT 51`, [id, org, before]);
+    reply.header('Cache-Control', 'no-store');
+    return { conversation: conversation.rows[0], messages: messages.rows.slice(0, 50).reverse(), hasMore: messages.rows.length > 50 };
+  });
+  app.post('/api/conversations/:id/messages', { preHandler: authenticate }, async (request, reply) => {
+    const id = (request.params as { id: string }).id;
+    const body = request.body as { id?: unknown; text?: unknown } | null;
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuid.test(id) || typeof body?.id !== 'string' || !uuid.test(body.id) || typeof body.text !== 'string' || !body.text.trim() || body.text.length > 4096) return reply.code(400).send({ error: 'Mensaje inválido' });
+    const org = request.principal!.organization_id;
+    const conv = await pool.query<{ channel_account_id: string; external_id: string; connection_type: string }>(`SELECT c.channel_account_id,c.external_id,a.connection_type FROM conversations c
+      JOIN channel_accounts a ON a.id=c.channel_account_id AND a.organization_id=c.organization_id WHERE c.id=$1 AND c.organization_id=$2`, [id, org]);
+    const target = conv.rows[0];
+    if (!target) return reply.code(404).send({ error: 'Conversación no encontrada' });
+    const existing = async () => {
+      const found = await pool.query<{ conversation_id: string; body: string; send_state: string | null }>('SELECT conversation_id,body,send_state FROM messages WHERE id=$1 AND organization_id=$2', [body.id, org]);
+      return found.rows[0];
+    };
+    const prior = await existing();
+    if (prior) {
+      if (prior.conversation_id !== id || prior.body !== body.text || !prior.send_state) return reply.code(409).send({ error: 'Identificador de envío ya utilizado' });
+      return reply.code(202).send({ id: body.id, send_state: prior.send_state });
+    }
+    if (target.connection_type !== 'whatsapp_web' || !/@(s\.whatsapp\.net|lid|g\.us)$/.test(target.external_id)) return reply.code(409).send({ error: 'Este canal no permite enviar mensajes' });
+    if (whatsapp.get(target.channel_account_id).state !== 'connected') return reply.code(409).send({ error: 'El canal está desconectado' });
+    const externalId = generateMessageIDV2();
+    const inserted = await pool.query(`INSERT INTO messages(id,organization_id,channel_account_id,conversation_id,provider_message_id,direction,message_type,body,occurred_at,send_state)
+      VALUES ($1,$2,$3,$4,$5,'outgoing','text',$6,now(),'sending') ON CONFLICT (id) DO NOTHING RETURNING id`, [body.id, org, target.channel_account_id, id, externalId, body.text]);
+    if (!inserted.rowCount) {
+      const concurrent = await existing();
+      if (!concurrent || concurrent.conversation_id !== id || concurrent.body !== body.text || !concurrent.send_state) return reply.code(409).send({ error: 'Identificador de envío ya utilizado' });
+      return reply.code(202).send({ id: body.id, send_state: concurrent.send_state });
+    }
+    await pool.query('UPDATE conversations SET last_message_at=GREATEST(COALESCE(last_message_at,now()),now()) WHERE id=$1 AND organization_id=$2', [id, org]);
+    let state = 'submitted';
+    try { await whatsapp.sendText(target.channel_account_id, target.external_id, body.text, externalId); }
+    catch { state = 'unknown'; request.log.warn({ code: 'whatsapp_send_unconfirmed' }, 'Resultado de envío incierto'); }
+    await pool.query('UPDATE messages SET send_state=$1 WHERE id=$2 AND organization_id=$3', [state, body.id, org]);
+    return reply.code(202).send({ id: body.id, send_state: state });
   });
   app.get('/api/channels', { preHandler: authenticate }, async (request, reply) => {
     if (request.principal!.role !== 'admin') return reply.code(403).send({ error: 'Permiso denegado' });

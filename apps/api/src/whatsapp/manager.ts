@@ -17,6 +17,12 @@ export class WhatsAppManager {
 
   get(id: string) { const entry = this.entries.get(id); return { state: entry?.state ?? 'disconnected', qr: entry && Date.now() - entry.qrAt < 60000 ? entry.qr : null }; }
 
+  async sendText(id: string, jid: string, text: string, messageId: string) {
+    const entry = this.entries.get(id);
+    if (!entry?.socket || entry.state !== 'connected') throw new Error('Canal desconectado');
+    await entry.socket.sendMessage(jid, { text }, { messageId });
+  }
+
   private async ensureLock() {
     if (this.lock) return;
     if (!this.locking) this.locking = (async () => {

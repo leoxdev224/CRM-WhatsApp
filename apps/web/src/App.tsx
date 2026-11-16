@@ -15,11 +15,11 @@ type Channel = { id: string; phone_number: string | null; display_name: string; 
 
 export function ChannelList({ channels }: { channels: Channel[] }) {
   const states: Record<string, string> = { awaiting_qr: 'Pendiente', starting: 'Conectando', qr: 'Esperando QR', connected: 'Conectado', disconnected: 'Desconectado', revoked: 'Revocado', duplicate: 'Número duplicado', duplicate_cleanup_failed: 'Revisión necesaria' };
-  return <section aria-labelledby="channels-title">
+  return <section className="channel-section" aria-labelledby="channels-title">
     <h2 id="channels-title">Canales de WhatsApp</h2>
     <p>Los ejemplos son ficticios; las conexiones de WhatsApp Web muestran el estado del servidor.</p>
-    {channels.length === 0 ? <p>No hay canales registrados.</p> : <ul>{channels.map((channel) => (
-      <li key={channel.id}>{channel.display_name} · {channel.phone_number ?? 'Sin número vinculado'} · {states[channel.connection_status] ?? 'Estado desconocido'}{channel.connection_type === 'demo' && ' (ejemplo ficticio)'}</li>
+    {channels.length === 0 ? <p>No hay canales registrados.</p> : <ul className="channel-list">{channels.map((channel) => (
+      <li key={channel.id}><span className="channel-dot" aria-hidden="true" /><span><strong>{channel.display_name}</strong><small>{channel.phone_number ?? 'Sin número vinculado'}{channel.connection_type === 'demo' && ' · Ejemplo ficticio'}</small></span><span className="channel-state">{states[channel.connection_status] ?? 'Estado desconocido'}</span></li>
     ))}</ul>}
   </section>;
 }
@@ -74,13 +74,13 @@ function ChannelManager({ token, channels, refresh }: { token: string; channels:
       setActive(null); setConnection(null); await refresh();
     } catch { setMessage('No se pudo desvincular el canal.'); }
   }
-  return <section aria-labelledby="manage-title"><h2 id="manage-title">Vincular WhatsApp Web</h2>
+  return <section className="channel-section channel-connect" aria-labelledby="manage-title"><h2 id="manage-title">Vincular WhatsApp Web</h2>
     <p>Integración no oficial. Probá primero con un número de prueba.</p>
-    <form onSubmit={create}><label>Nombre del canal <input required maxLength={100} value={name} onChange={(event) => setName(event.target.value)} /></label><button>Agregar canal</button></form>
-    <ul>{channels.filter((channel) => channel.connection_type === 'whatsapp_web').map((channel) => <li key={channel.id}>
-      {channel.display_name} · {channel.phone_number ?? 'Sin número vinculado'} · {active === channel.id ? connection?.status ?? 'starting' : channel.connection_status}
-      {' '}<button type="button" onClick={() => void connect(channel.id)}>Conectar / ver QR</button>{' '}
-      <button type="button" onClick={() => void disconnect(channel.id)}>Desvincular</button>
+    <form className="channel-form" onSubmit={create}><label>Nombre del canal <input placeholder="Ej. Atención principal" required maxLength={100} value={name} onChange={(event) => setName(event.target.value)} /></label><button className="button-primary">Agregar canal</button></form>
+    <ul className="manage-list">{channels.filter((channel) => channel.connection_type === 'whatsapp_web').map((channel) => <li key={channel.id}>
+      <div className="manage-channel"><div><strong>{channel.display_name}</strong><small>{channel.phone_number ?? 'Sin número vinculado'} · {active === channel.id ? connection?.status ?? 'starting' : channel.connection_status}</small></div>
+      <div className="manage-actions"><button type="button" onClick={() => void connect(channel.id)}>Conectar / ver QR</button>{' '}
+      <button type="button" onClick={() => void disconnect(channel.id)}>Desvincular</button></div></div>
       {active === channel.id && connection?.qr && <div><p>En WhatsApp: Dispositivos vinculados → Vincular dispositivo.</p><img src={connection.qr} alt="Código QR para vincular WhatsApp" /></div>}
       {active === channel.id && connection?.status === 'duplicate' && <p role="alert">Este número ya está registrado en otro canal de esta organización. Se solicitó desvincular la sesión duplicada; comprobá Dispositivos vinculados en el teléfono.</p>}
       {active === channel.id && connection?.status === 'duplicate_cleanup_failed' && <p role="alert">Este número ya está registrado en otro canal. No se pudo completar la limpieza: revisá y desvinculá el dispositivo duplicado desde WhatsApp antes de volver a intentar.</p>}
@@ -105,6 +105,7 @@ export function App() {
   const [restoring, setRestoring] = useState(hasSavedSession);
   const [restoreError, setRestoreError] = useState(false);
   const [restoreAttempt, setRestoreAttempt] = useState(0);
+  const [channelsOpen, setChannelsOpen] = useState(false);
 
   useEffect(() => {
     if (!restoring) return;
@@ -170,21 +171,28 @@ export function App() {
     } catch { setError('No se pudo cerrar la sesión. Intentá nuevamente.'); }
   }
 
-  return (
-    <main className={token ? 'workspace' : undefined}>
-      <h1>CRM WhatsApp</h1>
-      {restoring ? <p role="status">Recuperando sesión…</p> : restoreError ? <><p role="alert">No se pudo comprobar la sesión. Revisá la conexión.</p><button type="button" onClick={() => { setRestoreError(false); setRestoring(true); setRestoreAttempt((value) => value + 1); }}>Reintentar</button></> : token ? <><p>Sesión iniciada: {name}</p><button type="button" onClick={logout}>Cerrar sesión</button>
-        <Inbox token={token} />
-        {role === 'admin' && <details className="channel-settings"><summary>Administrar canales</summary>{channelError ? <p role="alert">{channelError}</p> : channels ? <><ChannelList channels={channels} /><ChannelManager token={token} channels={channels} refresh={refreshChannels} /></> : <p role="status">Cargando canales…</p>}</details>}
-      </> : (
-        <form onSubmit={login}>
+  if (token) return <div className="app-shell">
+    <aside className="sidebar"><a className="brand" href="#inbox-title"><span className="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M5 5.5h14v10H11l-4.5 3v-3H5z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/><path d="M8 9h8M8 12h5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg></span><span><strong>CRM WhatsApp</strong><small>Espacio de trabajo</small></span></a>
+      <nav className="side-nav" aria-label="Navegación principal"><span className="nav-label">ESPACIO DE TRABAJO</span><a className="nav-active" href="#inbox-title"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 5h16v11H9l-5 3V5Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round"/><path d="M8 9h8M8 12h5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"/></svg>Bandeja</a>{role === 'admin' && <a href="#channel-settings" onClick={() => setChannelsOpen(true)}><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M8 3v5m8-5v5M6 8h12v3a6 6 0 0 1-6 6v4m0-4a6 6 0 0 1-6-6V8Z" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"/></svg>Canales</a>}</nav>
+      <div className="sidebar-footer"><div className="user-avatar" aria-hidden="true">{name.trim().charAt(0).toUpperCase() || 'U'}</div><div className="user-info"><strong>{name}</strong><small>{role === 'admin' ? 'Administrador' : 'Operador'}</small></div><button className="logout-button" type="button" onClick={logout}>Cerrar sesión</button></div>
+    </aside>
+    <main className="workspace"><header className="workspace-top"><div><span className="top-context">CRM WhatsApp</span><span className="top-separator">/</span><span>Bandeja</span></div><div className="top-user">Sesión iniciada: <strong>{name}</strong></div></header>
+      <div className="workspace-content"><Inbox token={token} />
+        {role === 'admin' && <details id="channel-settings" className="channel-settings" open={channelsOpen} onToggle={(event) => setChannelsOpen(event.currentTarget.open)}><summary>Administrar canales <span>Conexiones y números de WhatsApp</span></summary><div className="channel-settings-content">{channelError ? <p role="alert">{channelError}</p> : channels ? <><ChannelList channels={channels} /><ChannelManager token={token} channels={channels} refresh={refreshChannels} /></> : <p role="status">Cargando canales…</p>}</div></details>}
+        {error && <p role="alert" className="global-error">{error}</p>}
+      </div>
+    </main>
+  </div>;
+
+  return <main className="login-page"><div className="login-card"><div className="login-brand"><span className="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M5 5.5h14v10H11l-4.5 3v-3H5z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/><path d="M8 9h8M8 12h5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg></span><span>CRM WhatsApp</span></div>
+    {restoring ? <p role="status">Recuperando sesión…</p> : restoreError ? <><p role="alert">No se pudo comprobar la sesión. Revisá la conexión.</p><button type="button" className="button-primary" onClick={() => { setRestoreError(false); setRestoring(true); setRestoreAttempt((value) => value + 1); }}>Reintentar</button></> : <><h1>Bienvenido de nuevo</h1><p className="login-intro">Ingresá para acceder a tu espacio de trabajo.</p>
+        <form className="login-form" onSubmit={login}>
           <label>Correo electrónico <input type="email" autoComplete="username" required value={email} onChange={(event) => setEmail(event.target.value)} /></label>
           <label>Contraseña <input type="password" autoComplete="current-password" required value={password} onChange={(event) => setPassword(event.target.value)} /></label>
           <label>Código de autenticación (administradores) <input type="text" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" value={code} onChange={(event) => setCode(event.target.value)} /></label>
-          <button type="submit" disabled={busy}>{busy ? 'Ingresando…' : 'Ingresar'}</button>
+          <button type="submit" className="button-primary" disabled={busy}>{busy ? 'Ingresando…' : 'Ingresar'}</button>
         </form>
-      )}
-      {error && <p role="alert">{error}</p>}
-    </main>
-  );
+      </>}
+      {error && <p role="alert" className="global-error">{error}</p>}
+      </div><p className="login-footer">Tu espacio para atender conversaciones</p></main>;
 }
