@@ -1,0 +1,68 @@
+import assert from 'node:assert/strict';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { test } from 'node:test';
+import Fastify from 'fastify';
+import pg from 'pg';
+import { registerAuth } from '../src/auth/routes.js';
+import type { WhatsAppManager } from '../src/whatsapp/manager.js';
+
+test('historial y envío respetan organización, canal e idempotencia sin reintentar errores', async (t) => {
+  const pool = new pg.Pool({ connectionTimeoutMillis: 3000 });
+  const app = Fastify();
+  const org = randomUUID(), other = randomUUID(), user = randomUUID(), channel = randomUUID(), foreignChannel = randomUUID(), contact = randomUUID(), conv = randomUUID(), foreignConv = randomUUID();
+  const token = randomBytes(32).toString('hex');
+  let sends = 0; let fail = false;
+  const whatsapp = { get: () => ({ state: 'connected' }), sendText: async (account: string, jid: string, text: string, id: string) => {
+    assert.equal(account, channel); assert.equal(jid, '1234567@s.whatsapp.net'); assert.ok(text); assert.ok(id); sends++; if (fail) throw new Error('offline');
+  } } as unknown as WhatsAppManager;
+  registerAuth(app, pool, whatsapp);
+  t.after(async () => {
+    await app.close();
+    await pool.query('DELETE FROM messages WHERE organization_id = ANY($1::uuid[])', [[org, other]]);
+    await pool.query('DELETE FROM conversations WHERE organization_id = ANY($1::uuid[])', [[org, other]]);
+    await pool.query('DELETE FROM contacts WHERE organization_id = ANY($1::uuid[])', [[org, other]]);
+    await pool.query('DELETE FROM channel_accounts WHERE organization_id = ANY($1::uuid[])', [[org, other]]);
+    await pool.query('DELETE FROM users WHERE organization_id = ANY($1::uuid[])', [[org, other]]);
+    await pool.query('DELETE FROM organizations WHERE id = ANY($1::uuid[])', [[org, other]]);
+    await pool.end();
+  });
+  await pool.query('INSERT INTO organizations (id,name,slug) VALUES ($1,$1::uuid::text,$1::uuid::text),($2,$2::uuid::text,$2::uuid::text)', [org, other]);
+  await pool.query("INSERT INTO users (id,organization_id,email,display_name,role) VALUES ($1,$2,$3,'Operador','operator')", [user, org, `${user}@example.test`]);
+  await pool.query("INSERT INTO auth_sessions (token_hash,user_id,expires_at,mfa_verified) VALUES ($1,$2,now()+interval '1 hour',false)", [createHash('sha256').update(token).digest('hex'), user]);
+  await pool.query("INSERT INTO channel_accounts (id,organization_id,display_name,phone_number,connection_type) VALUES ($1,$3,'Línea A','+5491100012222','whatsapp_web'),($2,$4,'Línea B','+5491100013333','whatsapp_web')", [channel, foreignChannel, org, other]);
+  await pool.query("INSERT INTO contacts(id,organization_id,display_name) VALUES ($1,$2,'Cliente')", [contact, org]);
+  await pool.query("INSERT INTO conversations(id,organization_id,channel_account_id,contact_id,external_id) VALUES ($1,$2,$3,$4,'1234567@s.whatsapp.net')", [conv, org, channel, contact]);
+  await pool.query("INSERT INTO conversations(id,organization_id,channel_account_id,kind,external_id) VALUES ($1,$2,$3,'group','privado@g.us')", [foreignConv, other, foreignChannel]);
+  const headers = { authorization: `Bearer ${token}` };
+  const path = `/api/conversations/${conv}/messages`;
+  assert.equal((await app.inject({ method: 'GET', url: path })).statusCode, 401);
+  assert.equal((await app.inject({ method: 'GET', url: `/api/conversations/${foreignConv}/messages`, headers })).statusCode, 404);
+  assert.equal((await app.inject({ method: 'POST', url: `/api/conversations/${foreignConv}/messages`, headers, payload: { id: randomUUID(), text: 'Hola' } })).statusCode, 404);
+  const id = randomUUID();
+  const payload = { id, text: 'Hola, ¿cómo estás?' };
+  const responses = await Promise.all([app.inject({ method: 'POST', url: path, headers, payload }), app.inject({ method: 'POST', url: path, headers, payload })]);
+  assert.ok(responses.every((response) => response.statusCode === 202));
+  assert.equal(sends, 1);
+  assert.equal((await app.inject({ method: 'POST', url: path, headers, payload: { id, text: 'Otro texto' } })).statusCode, 409);
+  const history = await app.inject({ method: 'GET', url: path, headers });
+  assert.equal(history.json().messages.length, 1);
+  assert.equal(history.json().messages[0].body, payload.text);
+  assert.equal(history.json().messages[0].send_state, 'submitted');
+  fail = true;
+  const uncertain = { id: randomUUID(), text: 'Otro mensaje' };
+  const first = await app.inject({ method: 'POST', url: path, headers, payload: uncertain });
+  const again = await app.inject({ method: 'POST', url: path, headers, payload: uncertain });
+  assert.equal(first.json().send_state, 'unknown');
+  assert.equal(again.json().send_state, 'unknown');
+  assert.equal(sends, 2);
+  await pool.query(`INSERT INTO messages (organization_id,channel_account_id,conversation_id,provider_message_id,direction,body,occurred_at)
+    SELECT $1,$2,$3,'old-'||n,'incoming','Anterior',now()-n*interval '1 minute' FROM generate_series(1,52) n`, [org, channel, conv]);
+  const page = (await app.inject({ method: 'GET', url: path, headers })).json();
+  assert.equal(page.messages.length, 50);
+  assert.equal(page.hasMore, true);
+  await pool.query("INSERT INTO messages (organization_id,channel_account_id,conversation_id,provider_message_id,direction,body,occurred_at) VALUES ($1,$2,$3,'newest','incoming','Nuevo',now()+interval '1 second')", [org, channel, conv]);
+  const older = (await app.inject({ method: 'GET', url: `${path}?before=${page.messages[0].id}`, headers })).json();
+  assert.equal(older.messages.length, 4);
+  assert.equal(older.hasMore, false);
+  assert.ok(older.messages.every((message: { id: string }) => !page.messages.some((previous: { id: string }) => previous.id === message.id)));
+});

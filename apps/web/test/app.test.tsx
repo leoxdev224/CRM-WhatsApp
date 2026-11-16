@@ -3,12 +3,21 @@ import { test } from 'node:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { App, ChannelList } from '../src/App.js';
 import { ConversationList } from '../src/Inbox.js';
+import { MessageList } from '../src/Chat.js';
 
 test('la pantalla inicial muestra el formulario de acceso', () => {
   const html = renderToStaticMarkup(<App />);
   assert.match(html, /Correo electrónico/);
   assert.match(html, /Contraseña/);
-  assert.match(html, /<h1>CRM WhatsApp<\/h1>/);
+  assert.match(html, /<h1>Bienvenido de nuevo<\/h1>/);
+});
+
+test('el historial distingue mensajes y deja claro un envío incierto', () => {
+  const html = renderToStaticMarkup(<MessageList messages={[
+    { id: '1', direction: 'incoming', message_type: 'text', body: 'Hola', occurred_at: '2026-01-01T12:00:00Z', sender_external_id: null, delivery_status: null, send_state: null },
+    { id: '2', direction: 'outgoing', message_type: 'text', body: 'Buen día', occurred_at: '2026-01-01T12:01:00Z', sender_external_id: null, delivery_status: null, send_state: 'unknown' },
+  ]} />);
+  assert.match(html, /Hola/); assert.match(html, /Buen día/); assert.match(html, /Sin confirmar/);
 });
 
 test('la bandeja muestra datos de una conversación y su último mensaje', () => {
