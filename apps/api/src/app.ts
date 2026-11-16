@@ -1,6 +1,7 @@
 import Fastify from 'fastify';
 import type { Pool } from 'pg';
 import { registerAuth } from './auth/routes.js';
+import { WhatsAppManager } from './whatsapp/manager.js';
 
 export function buildApp(pool: Pool) {
   const app = Fastify({ logger: true });
@@ -10,7 +11,8 @@ export function buildApp(pool: Pool) {
   });
 
   app.get('/api/health', async () => ({ status: 'ok' }));
-  registerAuth(app, pool);
+  const whatsapp = new WhatsAppManager(pool);
+  registerAuth(app, pool, whatsapp);
 
   app.get('/api/ready', async (request, reply) => {
     try {
@@ -22,6 +24,6 @@ export function buildApp(pool: Pool) {
     }
   });
 
-  app.addHook('onClose', async () => { await pool.end(); });
+  app.addHook('onClose', async () => { await whatsapp.close(); await pool.end(); });
   return app;
 }
