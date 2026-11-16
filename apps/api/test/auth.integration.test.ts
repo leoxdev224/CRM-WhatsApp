@@ -5,6 +5,8 @@ import pg from 'pg';
 import { buildApp } from '../src/app.js';
 import { hashPassword } from '../src/auth/password.js';
 import { codeAt, createSecret, encryptSecret } from '../src/auth/totp.js';
+import { createAuthStore } from '../src/whatsapp/store.js';
+import { claimAccount } from '../src/whatsapp/claim.js';
 
 test('sesiones y permisos aíslan organizaciones y roles', async (t) => {
   const pool = new pg.Pool({ connectionTimeoutMillis: 3000 });
@@ -16,7 +18,9 @@ test('sesiones y permisos aíslan organizaciones y roles', async (t) => {
   const adminEmail = `${admin}@example.test`;
   const password = 'contraseña larga de prueba';
   process.env.MFA_ENCRYPTION_KEY = 'bb'.repeat(32);
+  process.env.WHATSAPP_SESSION_KEY = 'cc'.repeat(32);
   t.after(async () => {
+    await pool.query('DELETE FROM channel_accounts WHERE organization_id = $1', [org]);
     await pool.query('DELETE FROM users WHERE id = ANY($1::uuid[])', [[operator, admin]]);
     await pool.query('DELETE FROM organizations WHERE id = $1', [org]);
     await app.close();
@@ -33,6 +37,7 @@ test('sesiones y permisos aíslan organizaciones y roles', async (t) => {
   const headers = { authorization: `Bearer ${token}` };
   assert.deepEqual((await app.inject({ method: 'GET', url: '/api/conversations', headers })).json(), { conversations: [] });
   assert.equal((await app.inject({ method: 'GET', url: '/api/channels', headers })).statusCode, 403);
+  assert.equal((await app.inject({ method: 'POST', url: '/api/channels', headers, payload: { displayName: 'No autorizado' } })).statusCode, 403);
   assert.equal((await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: adminEmail, password } })).statusCode, 401);
   const secret = createSecret();
   await pool.query('UPDATE users SET mfa_secret_encrypted = $1 WHERE id = $2', [encryptSecret(secret), admin]);
@@ -40,7 +45,39 @@ test('sesiones y permisos aíslan organizaciones y roles', async (t) => {
   const code = codeAt(secret, Math.floor(Date.now() / 30000));
   const adminLogin = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: adminEmail, password, code } });
   assert.equal(adminLogin.statusCode, 200);
-  assert.equal((await app.inject({ method: 'GET', url: '/api/channels', headers: { authorization: `Bearer ${adminLogin.json().token}` } })).statusCode, 200);
+  const adminHeaders = { authorization: `Bearer ${adminLogin.json().token}` };
+  assert.equal((await app.inject({ method: 'GET', url: '/api/channels', headers: adminHeaders })).statusCode, 200);
+  const created = await app.inject({ method: 'POST', url: '/api/channels', headers: adminHeaders, payload: { displayName: 'Prueba QR' } });
+  assert.equal(created.statusCode, 201);
+  const channel = created.json().id as string;
+  assert.equal((await app.inject({ method: 'POST', url: `/api/channels/${channel}/connect`, headers })).statusCode, 403);
+  assert.equal((await app.inject({ method: 'POST', url: `/api/channels/${channel}/disconnect`, headers })).statusCode, 403);
+  assert.equal((await app.inject({ method: 'POST', url: `/api/channels/${channel}/disconnect`, headers: adminHeaders })).statusCode, 204);
+  assert.equal((await pool.query<{ connection_status: string }>('SELECT connection_status FROM channel_accounts WHERE id=$1', [channel])).rows[0]?.connection_status, 'revoked');
+  assert.equal((await app.inject({ method: 'GET', url: `/api/channels/${channel}/connection`, headers })).statusCode, 403);
+  assert.equal((await app.inject({ method: 'GET', url: '/api/channels/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/connection', headers: adminHeaders })).statusCode, 404);
+  const status = await app.inject({ method: 'GET', url: `/api/channels/${channel}/connection`, headers: adminHeaders });
+  assert.deepEqual(status.json(), { status: 'disconnected', qr: null });
+  assert.equal(status.headers['cache-control'], 'no-store');
+  const store = await createAuthStore(pool, channel);
+  await store.state.keys.set({ 'lid-mapping': { example: 'contenido-privado' } });
+  assert.equal((await app.inject({ method: 'POST', url: `/api/channels/${channel}/disconnect`, headers: adminHeaders })).statusCode, 409);
+  const ciphertext = await pool.query<{ encrypted_value: string }>('SELECT encrypted_value FROM whatsapp_auth_state WHERE channel_account_id = $1', [channel]);
+  assert.equal(ciphertext.rows.length, 1);
+  assert.ok(!ciphertext.rows[0]!.encrypted_value.includes('contenido-privado'));
+  const restored = await createAuthStore(pool, channel);
+  assert.deepEqual(await restored.state.keys.get('lid-mapping', ['example']), { example: 'contenido-privado' });
+  const firstChannel = randomUUID();
+  await pool.query("INSERT INTO channel_accounts (id, organization_id, display_name, phone_number, provider_account_id, connection_type, connection_status) VALUES ($1,$2,'Existente','+5491100099999','5491100099999@s.whatsapp.net','whatsapp_web','connected')", [firstChannel, org]);
+  let unlinkCalls = 0;
+  assert.equal(await claimAccount(pool, channel, '5491100099999@s.whatsapp.net', '+5491100099999', async () => { unlinkCalls++; }), 'duplicate');
+  assert.equal(unlinkCalls, 1);
+  assert.equal((await pool.query('SELECT 1 FROM whatsapp_auth_state WHERE channel_account_id=$1', [channel])).rowCount, 0);
+  const original = await pool.query<{ connection_status: string }>('SELECT connection_status FROM channel_accounts WHERE id=$1', [firstChannel]);
+  assert.equal(original.rows[0]?.connection_status, 'connected');
+  await store.state.keys.set({ 'lid-mapping': { example: 'contenido-privado' } });
+  assert.equal(await claimAccount(pool, channel, '5491100099999@s.whatsapp.net', '+5491100099999', async () => { throw new Error('sin conexión'); }), 'duplicate_cleanup_failed');
+  assert.equal((await pool.query('SELECT 1 FROM whatsapp_auth_state WHERE channel_account_id=$1', [channel])).rowCount, 1);
   assert.equal((await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: adminEmail, password, code } })).statusCode, 401);
   await pool.query("UPDATE users SET role = 'admin', mfa_secret_encrypted = $1 WHERE id = $2", [encryptSecret(secret), operator]);
   assert.equal((await app.inject({ method: 'GET', url: '/api/channels', headers })).statusCode, 401);

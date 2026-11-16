@@ -100,12 +100,26 @@ Un único archivo `.env` en la raíz alimenta Docker Compose y la API. Vite lo l
 | `API_HOST` | Dirección donde escucha la API y a la que apunta el proxy. | `127.0.0.1` |
 | `API_PORT` | Puerto de la API. | `3002` |
 | `MFA_ENCRYPTION_KEY` | Clave persistente de 32 bytes en hexadecimal para cifrar secretos TOTP. | Generar localmente; nunca versionar. |
+| `WHATSAPP_SESSION_KEY` | Clave distinta, persistente, de 32 bytes en hexadecimal para cifrar sesiones de WhatsApp Web. | Generar localmente; nunca versionar. |
 
 - `.env` está excluido de Git; versionar únicamente `.env.example` con valores ficticios.
 - Las variables con prefijo `VITE_` se publican en el navegador: nunca poner contraseñas, tokens ni credenciales bajo ese prefijo.
 - Reiniciar `npm run dev` al cambiar `.env`.
 - Si el puerto de PostgreSQL está ocupado o reservado por Windows, cambiar `PGPORT` en `.env` y volver a ejecutar `npm run db:up`. Se usa 15432 para evitar conflictos con instalaciones locales en 5432.
 - Cambiar usuario, base o contraseña en `.env` **no modifica un volumen ya inicializado**; requiere una migración administrativa de la base. No eliminar el volumen para resolverlo si contiene datos que se necesiten conservar.
+
+## WhatsApp Web: vinculación experimental
+
+Esta integración usa una biblioteca no oficial; puede fallar si cambia WhatsApp o resultar en restricciones de cuenta. No está lista para producción ni validada con números reales. Usá un número de prueba y no la uses para difusión masiva.
+
+1. Generá una clave distinta de `MFA_ENCRYPTION_KEY` con `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` y colocala en `WHATSAPP_SESSION_KEY` en `.env`. No la compartas ni la subas al repositorio. Conservá una copia segura: si cambia, las sesiones guardadas no se podrán descifrar.
+2. Ejecutá `npm ci`, `npm run db:up` y `npm run db:migrate`. Reiniciá `npm run dev` si ya estaba abierto.
+3. Iniciá sesión como administrador, escribí un nombre en **Vincular WhatsApp Web** y presioná **Agregar canal**. Escaneá el QR desde WhatsApp → Dispositivos vinculados → Vincular dispositivo. El QR permite acceder a tu cuenta: no lo compartas.
+4. Cada canal tiene su sesión cifrada por separado. Si se reinicia el servidor, usá **Conectar / ver QR** para intentar restaurarla; si el dispositivo fue desvinculado, será necesario vincularlo de nuevo. **Desvincular** intenta cerrar el dispositivo en WhatsApp y eliminar la sesión local; requiere que el canal esté activo.
+
+Si se intenta conectar un número ya registrado en otro canal de la misma organización, el CRM rechaza el duplicado y solicita desvincular esa segunda sesión. Comprobá en **Dispositivos vinculados** del teléfono que no haya quedado un dispositivo duplicado: el servidor no puede garantizar la confirmación remota de la baja. Si falla la limpieza, el aviso indica que hace falta revisión manual.
+
+La implementación permite una sola instancia de la API administrando sesiones de WhatsApp a la vez. Los canales marcados como ejemplos son ficticios. No se implementan todavía la importación de historial, los mensajes ni la bandeja unificada. Para probar la recepción de un QR sin vincular una cuenta: `node --env-file=.env --import tsx --test apps/api/test/whatsapp.live.test.ts` (requiere PostgreSQL y acceso a WhatsApp).
 
 ## Organización
 

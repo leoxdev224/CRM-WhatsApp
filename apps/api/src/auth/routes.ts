@@ -3,6 +3,8 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
 import { verifyPassword } from './password.js';
 import { decryptSecret, verifyCode } from './totp.js';
+import QRCode from 'qrcode';
+import type { WhatsAppManager } from '../whatsapp/manager.js';
 
 type Principal = { id: string; organization_id: string; role: 'admin' | 'operator'; display_name: string };
 declare module 'fastify' { interface FastifyRequest { principal: Principal | null } }
@@ -13,7 +15,7 @@ const sessionToken = (request: FastifyRequest) => {
   return match?.[1];
 };
 
-export function registerAuth(app: FastifyInstance, pool: Pool) {
+export function registerAuth(app: FastifyInstance, pool: Pool, whatsapp: WhatsAppManager) {
   app.decorateRequest('principal', null);
 
   app.post('/api/auth/login', async (request, reply) => {
@@ -90,7 +92,36 @@ export function registerAuth(app: FastifyInstance, pool: Pool) {
   });
   app.get('/api/channels', { preHandler: authenticate }, async (request, reply) => {
     if (request.principal!.role !== 'admin') return reply.code(403).send({ error: 'Permiso denegado' });
-    const result = await pool.query('SELECT id, phone_number, display_name, connection_status FROM channel_accounts WHERE organization_id = $1', [request.principal!.organization_id]);
-    return { channels: result.rows };
+    const result = await pool.query<{ id: string; connection_type: string; connection_status: string }>('SELECT id, phone_number, display_name, connection_status, connection_type FROM channel_accounts WHERE organization_id = $1', [request.principal!.organization_id]);
+    return { channels: result.rows.map((channel) => channel.connection_type === 'whatsapp_web' ? { ...channel, connection_status: whatsapp.get(channel.id).state === 'disconnected' && channel.connection_status === 'revoked' ? 'revoked' : whatsapp.get(channel.id).state } : channel) };
+  });
+  async function admin(request: FastifyRequest, reply: FastifyReply) {
+    await authenticate(request, reply);
+    if (!reply.sent && request.principal?.role !== 'admin') await reply.code(403).send({ error: 'Permiso denegado' });
+  }
+  app.post('/api/channels', { preHandler: admin }, async (request, reply) => {
+    const body = request.body as { displayName?: unknown } | null;
+    if (typeof body?.displayName !== 'string' || !body.displayName.trim() || body.displayName.length > 100) return reply.code(400).send({ error: 'Nombre inválido' });
+    const result = await pool.query<{ id: string }>("INSERT INTO channel_accounts (organization_id, display_name, connection_type, connection_status, created_by_user_id) VALUES ($1,$2,'whatsapp_web','disconnected',$3) RETURNING id", [request.principal!.organization_id, body.displayName.trim(), request.principal!.id]);
+    return reply.code(201).send({ id: result.rows[0]!.id });
+  });
+  async function ownChannel(request: FastifyRequest, reply: FastifyReply) {
+    const id = (request.params as { id: string }).id;
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) { await reply.code(404).send({ error: 'Canal no encontrado' }); return; }
+    const result = await pool.query("SELECT id FROM channel_accounts WHERE id=$1 AND organization_id=$2 AND connection_type='whatsapp_web'", [id, request.principal!.organization_id]);
+    if (!result.rowCount) await reply.code(404).send({ error: 'Canal no encontrado' });
+  }
+  app.post('/api/channels/:id/connect', { preHandler: [admin, ownChannel] }, async (request, reply) => {
+    try { await whatsapp.start((request.params as { id: string }).id); return reply.code(202).send({ status: 'starting' }); }
+    catch { return reply.code(503).send({ error: 'No se pudo iniciar la conexión. Revisá la configuración del servidor.' }); }
+  });
+  app.get('/api/channels/:id/connection', { preHandler: [admin, ownChannel] }, async (request, reply) => {
+    const result = whatsapp.get((request.params as { id: string }).id);
+    reply.header('Cache-Control', 'no-store');
+    return { status: result.state, qr: result.qr ? await QRCode.toDataURL(result.qr, { errorCorrectionLevel: 'M' }) : null };
+  });
+  app.post('/api/channels/:id/disconnect', { preHandler: [admin, ownChannel] }, async (request, reply) => {
+    try { await whatsapp.disconnect((request.params as { id: string }).id); return reply.code(204).send(); }
+    catch { return reply.code(409).send({ error: 'No se pudo desvincular. Comprobá el estado e intentá nuevamente.' }); }
   });
 }
