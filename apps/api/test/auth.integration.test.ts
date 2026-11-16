@@ -35,7 +35,7 @@ test('sesiones y permisos aíslan organizaciones y roles', async (t) => {
   assert.equal(login.statusCode, 200);
   const token = login.json().token as string;
   const headers = { authorization: `Bearer ${token}` };
-  assert.deepEqual((await app.inject({ method: 'GET', url: '/api/conversations', headers })).json(), { conversations: [] });
+  assert.deepEqual((await app.inject({ method: 'GET', url: '/api/conversations', headers })).json(), { conversations: [], hasMore: false });
   assert.equal((await app.inject({ method: 'GET', url: '/api/channels', headers })).statusCode, 403);
   assert.equal((await app.inject({ method: 'POST', url: '/api/channels', headers, payload: { displayName: 'No autorizado' } })).statusCode, 403);
   assert.equal((await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: adminEmail, password } })).statusCode, 401);

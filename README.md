@@ -119,7 +119,7 @@ Esta integración usa una biblioteca no oficial; puede fallar si cambia WhatsApp
 
 Si se intenta conectar un número ya registrado en otro canal de la misma organización, el CRM rechaza el duplicado y solicita desvincular esa segunda sesión. Comprobá en **Dispositivos vinculados** del teléfono que no haya quedado un dispositivo duplicado: el servidor no puede garantizar la confirmación remota de la baja. Si falla la limpieza, el aviso indica que hace falta revisión manual.
 
-La implementación permite una sola instancia de la API administrando sesiones de WhatsApp a la vez. Los canales marcados como ejemplos son ficticios. La recepción y el guardado de mensajes están descritos en [ingesta de WhatsApp Web](docs/whatsapp-ingestion.md); todavía no hay bandeja unificada ni importación garantizada del historial. Para probar la recepción de un QR sin vincular una cuenta: `node --env-file=.env --import tsx --test apps/api/test/whatsapp.live.test.ts` (requiere PostgreSQL y acceso a WhatsApp).
+La implementación permite una sola instancia de la API administrando sesiones de WhatsApp a la vez. Los canales marcados como ejemplos son ficticios. La recepción y el guardado de mensajes están descritos en [ingesta de WhatsApp Web](docs/whatsapp-ingestion.md); la bandeja muestra conversaciones y su último mensaje, pero no permite todavía abrir ni responder chats. No se garantiza la importación del historial. Para probar la recepción de un QR sin vincular una cuenta: `node --env-file=.env --import tsx --test apps/api/test/whatsapp.live.test.ts` (requiere PostgreSQL y acceso a WhatsApp).
 
 ## Organización
 

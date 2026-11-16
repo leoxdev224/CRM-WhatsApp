@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { restoreSession, sessionKey } from './session.js';
+import { Inbox } from './Inbox.js';
 
 function sessionStorageOrNull(): Storage | null {
   try { return typeof window === 'undefined' ? null : window.sessionStorage; } catch { return null; }
@@ -170,10 +171,11 @@ export function App() {
   }
 
   return (
-    <main>
+    <main className={token ? 'workspace' : undefined}>
       <h1>CRM WhatsApp</h1>
       {restoring ? <p role="status">Recuperando sesión…</p> : restoreError ? <><p role="alert">No se pudo comprobar la sesión. Revisá la conexión.</p><button type="button" onClick={() => { setRestoreError(false); setRestoring(true); setRestoreAttempt((value) => value + 1); }}>Reintentar</button></> : token ? <><p>Sesión iniciada: {name}</p><button type="button" onClick={logout}>Cerrar sesión</button>
-        {role === 'admin' && (channelError ? <p role="alert">{channelError}</p> : channels ? <><ChannelList channels={channels} /><ChannelManager token={token} channels={channels} refresh={refreshChannels} /></> : <p role="status">Cargando canales…</p>)}
+        <Inbox token={token} />
+        {role === 'admin' && <details className="channel-settings"><summary>Administrar canales</summary>{channelError ? <p role="alert">{channelError}</p> : channels ? <><ChannelList channels={channels} /><ChannelManager token={token} channels={channels} refresh={refreshChannels} /></> : <p role="status">Cargando canales…</p>}</details>}
       </> : (
         <form onSubmit={login}>
           <label>Correo electrónico <input type="email" autoComplete="username" required value={email} onChange={(event) => setEmail(event.target.value)} /></label>

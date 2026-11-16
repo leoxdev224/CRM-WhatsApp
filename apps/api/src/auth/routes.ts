@@ -86,9 +86,39 @@ export function registerAuth(app: FastifyInstance, pool: Pool, whatsapp: WhatsAp
     await pool.query('DELETE FROM auth_sessions WHERE token_hash = $1', [digest(sessionToken(request)!)]);
     return reply.code(204).send();
   });
-  app.get('/api/conversations', { preHandler: authenticate }, async (request) => {
-    const result = await pool.query('SELECT id, channel_account_id, contact_id, kind, status, last_message_at FROM conversations WHERE organization_id = $1 ORDER BY last_message_at DESC NULLS LAST LIMIT 100', [request.principal!.organization_id]);
-    return { conversations: result.rows };
+  app.get('/api/conversations', { preHandler: authenticate }, async (request, reply) => {
+    const query = request.query as Record<string, unknown>;
+    const { search = '', channel = '', status = '', operator = '', limit = '20', offset = '0' } = query;
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if ([search, channel, status, operator, limit, offset].some((value) => typeof value !== 'string') ||
+      (search as string).length > 100 || (channel !== '' && !uuid.test(channel as string)) ||
+      (operator !== '' && operator !== 'unassigned' && !uuid.test(operator as string)) ||
+      (status !== '' && !['open', 'pending', 'resolved', 'spam'].includes(status as string)) ||
+      !/^\d+$/.test(limit as string) || Number(limit) < 1 || Number(limit) > 100 ||
+      !/^\d+$/.test(offset as string) || Number(offset) > 100000) return reply.code(400).send({ error: 'Filtros inválidos' });
+    const result = await pool.query(`SELECT c.id,c.channel_account_id,c.contact_id,c.kind,c.status,c.last_message_at,c.assigned_user_id,
+      COALESCE(contact.display_name, c.external_id) AS contact_name, contact.phone_number AS contact_phone,
+      account.display_name AS channel_name, account.phone_number AS channel_phone, operator.display_name AS operator_name,
+      last.body AS last_message,last.message_type AS last_message_type,last.direction AS last_message_direction
+      FROM conversations c
+      JOIN channel_accounts account ON account.id=c.channel_account_id AND account.organization_id=c.organization_id
+      LEFT JOIN contacts contact ON contact.id=c.contact_id AND contact.organization_id=c.organization_id
+      LEFT JOIN users operator ON operator.id=c.assigned_user_id AND operator.organization_id=c.organization_id
+      LEFT JOIN LATERAL (SELECT body,message_type,direction FROM messages m WHERE m.conversation_id=c.id AND m.organization_id=c.organization_id ORDER BY m.occurred_at DESC,m.id DESC LIMIT 1) last ON true
+      WHERE c.organization_id=$1 AND ($2='' OR position(lower($2) in lower(concat_ws(' ',contact.display_name,contact.phone_number,c.external_id)))>0)
+      AND ($3='' OR c.channel_account_id::text=$3) AND ($4='' OR c.status=$4)
+      AND ($5='' OR ($5='unassigned' AND c.assigned_user_id IS NULL) OR c.assigned_user_id::text=$5)
+      ORDER BY c.last_message_at DESC NULLS LAST,c.id DESC LIMIT $6 OFFSET $7`,
+    [request.principal!.organization_id, (search as string).trim(), channel, status, operator, Number(limit) + 1, Number(offset)]);
+    return { conversations: result.rows.slice(0, Number(limit)), hasMore: result.rows.length > Number(limit) };
+  });
+  app.get('/api/inbox/options', { preHandler: authenticate }, async (request) => {
+    const org = request.principal!.organization_id;
+    const [channels, operators] = await Promise.all([
+      pool.query('SELECT id,display_name,phone_number FROM channel_accounts WHERE organization_id=$1 ORDER BY display_name,id', [org]),
+      pool.query("SELECT id,display_name FROM users WHERE organization_id=$1 AND status='active' ORDER BY display_name,id", [org]),
+    ]);
+    return { channels: channels.rows, operators: operators.rows };
   });
   app.get('/api/channels', { preHandler: authenticate }, async (request, reply) => {
     if (request.principal!.role !== 'admin') return reply.code(403).send({ error: 'Permiso denegado' });
