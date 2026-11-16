@@ -87,7 +87,7 @@ export function registerAuth(app: FastifyInstance, pool: Pool, whatsapp: WhatsAp
     return reply.code(204).send();
   });
   app.get('/api/conversations', { preHandler: authenticate }, async (request) => {
-    const result = await pool.query('SELECT id, channel_account_id, contact_id, status, last_message_at FROM conversations WHERE organization_id = $1 ORDER BY last_message_at DESC NULLS LAST LIMIT 100', [request.principal!.organization_id]);
+    const result = await pool.query('SELECT id, channel_account_id, contact_id, kind, status, last_message_at FROM conversations WHERE organization_id = $1 ORDER BY last_message_at DESC NULLS LAST LIMIT 100', [request.principal!.organization_id]);
     return { conversations: result.rows };
   });
   app.get('/api/channels', { preHandler: authenticate }, async (request, reply) => {

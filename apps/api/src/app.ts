@@ -2,6 +2,7 @@ import Fastify from 'fastify';
 import type { Pool } from 'pg';
 import { registerAuth } from './auth/routes.js';
 import { WhatsAppManager } from './whatsapp/manager.js';
+import { WhatsAppIngestion } from './whatsapp/ingestion.js';
 
 export function buildApp(pool: Pool) {
   const app = Fastify({ logger: true });
@@ -11,8 +12,11 @@ export function buildApp(pool: Pool) {
   });
 
   app.get('/api/health', async () => ({ status: 'ok' }));
-  const whatsapp = new WhatsAppManager(pool);
+  const reportError = (code: string) => app.log.error({ code }, 'Error en procesamiento de WhatsApp');
+  const ingestion = new WhatsAppIngestion(pool, reportError);
+  const whatsapp = new WhatsAppManager(pool, ingestion, reportError);
   registerAuth(app, pool, whatsapp);
+  app.addHook('onReady', async () => { ingestion.start(); });
 
   app.get('/api/ready', async (request, reply) => {
     try {
@@ -24,6 +28,6 @@ export function buildApp(pool: Pool) {
     }
   });
 
-  app.addHook('onClose', async () => { await whatsapp.close(); await pool.end(); });
+  app.addHook('onClose', async () => { await whatsapp.close(); await ingestion.stop(); await pool.end(); });
   return app;
 }
