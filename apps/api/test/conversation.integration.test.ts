@@ -11,9 +11,9 @@ test('historial y envío respetan organización, canal e idempotencia sin reinte
   const app = Fastify();
   const org = randomUUID(), other = randomUUID(), user = randomUUID(), channel = randomUUID(), foreignChannel = randomUUID(), contact = randomUUID(), conv = randomUUID(), foreignConv = randomUUID();
   const token = randomBytes(32).toString('hex');
-  let sends = 0; let fail = false;
+  let sends = 0; let fail = false; let waitForSend: Promise<void> | null = null; let started: (() => void) | null = null;
   const whatsapp = { get: () => ({ state: 'connected' }), sendText: async (account: string, jid: string, text: string, id: string) => {
-    assert.equal(account, channel); assert.equal(jid, '1234567@s.whatsapp.net'); assert.ok(text); assert.ok(id); sends++; if (fail) throw new Error('offline');
+    assert.equal(account, channel); assert.equal(jid, '1234567@s.whatsapp.net'); assert.ok(text); assert.ok(id); sends++; started?.(); if (waitForSend) await waitForSend; if (fail) throw new Error('offline');
   } } as unknown as WhatsAppManager;
   registerAuth(app, pool, whatsapp);
   t.after(async () => {
@@ -33,7 +33,20 @@ test('historial y envío respetan organización, canal e idempotencia sin reinte
   await pool.query("INSERT INTO contacts(id,organization_id,display_name) VALUES ($1,$2,'Cliente')", [contact, org]);
   await pool.query("INSERT INTO conversations(id,organization_id,channel_account_id,contact_id,external_id) VALUES ($1,$2,$3,$4,'1234567@s.whatsapp.net')", [conv, org, channel, contact]);
   await pool.query("INSERT INTO conversations(id,organization_id,channel_account_id,kind,external_id) VALUES ($1,$2,$3,'group','privado@g.us')", [foreignConv, other, foreignChannel]);
+  const secondUser = randomUUID(), secondToken = randomBytes(32).toString('hex');
+  await pool.query("INSERT INTO users (id,organization_id,email,display_name,role) VALUES ($1,$2,$3,'Segundo','operator')", [secondUser, org, `${secondUser}@example.test`]);
+  await pool.query("INSERT INTO auth_sessions (token_hash,user_id,expires_at,mfa_verified) VALUES ($1,$2,now()+interval '1 hour',false)", [createHash('sha256').update(secondToken).digest('hex'), secondUser]);
+  const secondHeaders = { authorization: `Bearer ${secondToken}` };
   const headers = { authorization: `Bearer ${token}` };
+  const manage = `/api/conversations/${conv}`;
+  assert.equal((await app.inject({ method: 'POST', url: `${manage}/notes`, headers, payload: { body: 'Nota interna' } })).statusCode, 201);
+  assert.equal((await app.inject({ method: 'GET', url: `${manage}/notes`, headers })).json().notes[0].body, 'Nota interna');
+  assert.equal((await app.inject({ method: 'POST', url: `/api/conversations/${foreignConv}/notes`, headers, payload: { body: 'No' } })).statusCode, 404);
+  assert.equal((await app.inject({ method: 'POST', url: `${manage}/messages`, headers, payload: { id: randomUUID(), text: 'Sin asignar' } })).statusCode, 409);
+  assert.equal((await app.inject({ method: 'PATCH', url: manage, headers, payload: { assignedUserId: user, status: 'pending' } })).statusCode, 200);
+  const events = (await app.inject({ method: 'GET', url: `${manage}/activity`, headers })).json().activity;
+  assert.equal(events.length, 2);
+  assert.equal((await app.inject({ method: 'PATCH', url: manage, headers, payload: { assignedUserId: randomUUID() } })).statusCode, 400);
   const path = `/api/conversations/${conv}/messages`;
   assert.equal((await app.inject({ method: 'GET', url: path })).statusCode, 401);
   assert.equal((await app.inject({ method: 'GET', url: `/api/conversations/${foreignConv}/messages`, headers })).statusCode, 404);
@@ -48,13 +61,27 @@ test('historial y envío respetan organización, canal e idempotencia sin reinte
   assert.equal(history.json().messages.length, 1);
   assert.equal(history.json().messages[0].body, payload.text);
   assert.equal(history.json().messages[0].send_state, 'submitted');
+  assert.equal((await app.inject({ method: 'POST', url: path, headers: secondHeaders, payload: { id: randomUUID(), text: 'No corresponde' } })).statusCode, 409);
+  let release!: () => void;
+  waitForSend = new Promise<void>((resolve) => { release = resolve; });
+  const sendStarted = new Promise<void>((resolve) => { started = resolve; });
+  const inFlight = app.inject({ method: 'POST', url: path, headers, payload: { id: randomUUID(), text: 'En curso' } });
+  await sendStarted;
+  let reassigned = false;
+  const reassignment = app.inject({ method: 'PATCH', url: manage, headers: secondHeaders, payload: { assignedUserId: secondUser } }).then((response) => { reassigned = true; return response; });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(reassigned, false);
+  release(); await inFlight; assert.equal((await reassignment).statusCode, 200);
+  assert.equal((await app.inject({ method: 'POST', url: path, headers, payload: { id: randomUUID(), text: 'Ya no asignado' } })).statusCode, 409);
+  assert.equal((await app.inject({ method: 'PATCH', url: manage, headers, payload: { assignedUserId: user } })).statusCode, 200);
+  waitForSend = null; started = null;
   fail = true;
   const uncertain = { id: randomUUID(), text: 'Otro mensaje' };
   const first = await app.inject({ method: 'POST', url: path, headers, payload: uncertain });
   const again = await app.inject({ method: 'POST', url: path, headers, payload: uncertain });
   assert.equal(first.json().send_state, 'unknown');
   assert.equal(again.json().send_state, 'unknown');
-  assert.equal(sends, 2);
+  assert.equal(sends, 3);
   await pool.query(`INSERT INTO messages (organization_id,channel_account_id,conversation_id,provider_message_id,direction,body,occurred_at)
     SELECT $1,$2,$3,'old-'||n,'incoming','Anterior',now()-n*interval '1 minute' FROM generate_series(1,52) n`, [org, channel, conv]);
   const page = (await app.inject({ method: 'GET', url: path, headers })).json();
@@ -62,7 +89,7 @@ test('historial y envío respetan organización, canal e idempotencia sin reinte
   assert.equal(page.hasMore, true);
   await pool.query("INSERT INTO messages (organization_id,channel_account_id,conversation_id,provider_message_id,direction,body,occurred_at) VALUES ($1,$2,$3,'newest','incoming','Nuevo',now()+interval '1 second')", [org, channel, conv]);
   const older = (await app.inject({ method: 'GET', url: `${path}?before=${page.messages[0].id}`, headers })).json();
-  assert.equal(older.messages.length, 4);
+  assert.equal(older.messages.length, 5);
   assert.equal(older.hasMore, false);
   assert.ok(older.messages.every((message: { id: string }) => !page.messages.some((previous: { id: string }) => previous.id === message.id)));
 });

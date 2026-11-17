@@ -121,13 +121,60 @@ export function registerAuth(app: FastifyInstance, pool: Pool, whatsapp: WhatsAp
     ]);
     return { channels: channels.rows, operators: operators.rows };
   });
+
+  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  app.patch('/api/conversations/:id', { preHandler: authenticate }, async (request, reply) => {
+    const id = (request.params as { id: string }).id;
+    const body = request.body as { status?: unknown; assignedUserId?: unknown } | null;
+    if (!uuidPattern.test(id) || !body || (body.status === undefined && body.assignedUserId === undefined) ||
+      (body.status !== undefined && (typeof body.status !== 'string' || !['open', 'pending', 'resolved'].includes(body.status))) ||
+      (body.assignedUserId !== undefined && body.assignedUserId !== null && (typeof body.assignedUserId !== 'string' || !uuidPattern.test(body.assignedUserId)))) return reply.code(400).send({ error: 'Datos inválidos' });
+    const org = request.principal!.organization_id;
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [id]);
+      const current = await client.query<{status: string; assigned_user_id: string | null}>('SELECT status,assigned_user_id FROM conversations WHERE id=$1 AND organization_id=$2 FOR UPDATE', [id, org]);
+      if (!current.rowCount) { await client.query('ROLLBACK'); return reply.code(404).send({ error: 'Conversación no encontrada' }); }
+      if (body.assignedUserId && !(await client.query("SELECT 1 FROM users WHERE id=$1 AND organization_id=$2 AND status='active'", [body.assignedUserId, org])).rowCount) { await client.query('ROLLBACK'); return reply.code(400).send({ error: 'Responsable inválido' }); }
+      const old = current.rows[0]!;
+      const assigned = body.assignedUserId === undefined ? old.assigned_user_id : body.assignedUserId as string | null;
+      const status = body.status === undefined ? old.status : body.status as string;
+      await client.query('UPDATE conversations SET status=$1,assigned_user_id=$2 WHERE id=$3 AND organization_id=$4', [status, assigned, id, org]);
+      for (const [field, previous, next] of [['status', old.status, status], ['assigned_user_id', old.assigned_user_id, assigned]]) {
+        if (previous !== next) await client.query('INSERT INTO conversation_activity (organization_id,conversation_id,actor_id,field,old_value,new_value) VALUES ($1,$2,$3,$4,$5,$6)', [org,id,request.principal!.id,field,previous,next]);
+      }
+      await client.query('COMMIT');
+      return { status, assigned_user_id: assigned };
+    } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+  });
+  app.get('/api/conversations/:id/:section', { preHandler: authenticate }, async (request, reply) => {
+    const { id, section } = request.params as { id: string; section: string };
+    if (!uuidPattern.test(id) || !['notes', 'activity'].includes(section)) return reply.code(404).send({ error: 'No encontrado' });
+    const org = request.principal!.organization_id;
+    if (!(await pool.query('SELECT 1 FROM conversations WHERE id=$1 AND organization_id=$2', [id, org])).rowCount) return reply.code(404).send({ error: 'Conversación no encontrada' });
+    const result = section === 'notes'
+      ? await pool.query('SELECT n.id,n.body,n.created_at,u.display_name AS author FROM conversation_notes n JOIN users u ON u.id=n.author_id AND u.organization_id=n.organization_id WHERE n.conversation_id=$1 AND n.organization_id=$2 ORDER BY n.created_at DESC,n.id DESC', [id,org])
+      : await pool.query('SELECT a.id,a.field,a.old_value,a.new_value,a.created_at,u.display_name AS actor,old_user.display_name AS old_name,new_user.display_name AS new_name FROM conversation_activity a JOIN users u ON u.id=a.actor_id AND u.organization_id=a.organization_id LEFT JOIN users old_user ON old_user.id::text=a.old_value AND old_user.organization_id=a.organization_id AND a.field=\'assigned_user_id\' LEFT JOIN users new_user ON new_user.id::text=a.new_value AND new_user.organization_id=a.organization_id AND a.field=\'assigned_user_id\' WHERE a.conversation_id=$1 AND a.organization_id=$2 ORDER BY a.id DESC', [id,org]);
+    reply.header('Cache-Control', 'no-store');
+    return { [section]: result.rows };
+  });
+  app.post('/api/conversations/:id/notes', { preHandler: authenticate }, async (request, reply) => {
+    const id = (request.params as { id: string }).id;
+    const body = request.body as { body?: unknown } | null;
+    if (!uuidPattern.test(id) || typeof body?.body !== 'string' || !body.body.trim() || body.body.length > 4000) return reply.code(400).send({ error: 'Nota inválida' });
+    const org = request.principal!.organization_id;
+    const result = await pool.query('INSERT INTO conversation_notes (organization_id,conversation_id,author_id,body) SELECT $1,id,$3,$4 FROM conversations WHERE id=$2 AND organization_id=$1 RETURNING id', [org,id,request.principal!.id,body.body.trim()]);
+    if (!result.rowCount) return reply.code(404).send({ error: 'Conversación no encontrada' });
+    return reply.code(201).send(result.rows[0]);
+  });
   app.get('/api/conversations/:id/messages', { preHandler: authenticate }, async (request, reply) => {
     const id = (request.params as { id: string }).id;
     const { before = '' } = request.query as { before?: string };
     const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!uuid.test(id) || typeof before !== 'string' || (before !== '' && !uuid.test(before))) return reply.code(400).send({ error: 'Solicitud inválida' });
     const org = request.principal!.organization_id;
-    const conversation = await pool.query(`SELECT c.id,c.kind,c.status,COALESCE(contact.display_name,c.external_id) AS contact_name,
+    const conversation = await pool.query(`SELECT c.id,c.kind,c.status,c.assigned_user_id,contact.phone_number AS contact_phone,c.external_id,COALESCE(contact.display_name,c.external_id) AS contact_name,
       a.display_name AS channel_name,a.phone_number AS channel_phone,a.connection_type
       FROM conversations c JOIN channel_accounts a ON a.id=c.channel_account_id AND a.organization_id=c.organization_id
       LEFT JOIN contacts contact ON contact.id=c.contact_id AND contact.organization_id=c.organization_id
@@ -138,7 +185,7 @@ export function registerAuth(app: FastifyInstance, pool: Pool, whatsapp: WhatsAp
         (SELECT anchor.occurred_at,anchor.id FROM messages anchor WHERE anchor.id::text=$3 AND anchor.conversation_id=$1 AND anchor.organization_id=$2))
       ORDER BY occurred_at DESC,id DESC LIMIT 51`, [id, org, before]);
     reply.header('Cache-Control', 'no-store');
-    return { conversation: conversation.rows[0], messages: messages.rows.slice(0, 50).reverse(), hasMore: messages.rows.length > 50 };
+    return { current_user_id: request.principal!.id, conversation: conversation.rows[0], messages: messages.rows.slice(0, 50).reverse(), hasMore: messages.rows.length > 50 };
   });
   app.post('/api/conversations/:id/messages', { preHandler: authenticate }, async (request, reply) => {
     const id = (request.params as { id: string }).id;
@@ -146,12 +193,15 @@ export function registerAuth(app: FastifyInstance, pool: Pool, whatsapp: WhatsAp
     const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!uuid.test(id) || typeof body?.id !== 'string' || !uuid.test(body.id) || typeof body.text !== 'string' || !body.text.trim() || body.text.length > 4096) return reply.code(400).send({ error: 'Mensaje inválido' });
     const org = request.principal!.organization_id;
-    const conv = await pool.query<{ channel_account_id: string; external_id: string; connection_type: string }>(`SELECT c.channel_account_id,c.external_id,a.connection_type FROM conversations c
+    const client = await pool.connect();
+    try {
+    await client.query('SELECT pg_advisory_lock(hashtextextended($1, 0))', [id]);
+    const conv = await client.query<{ channel_account_id: string; external_id: string; connection_type: string; assigned_user_id: string | null }>(`SELECT c.channel_account_id,c.external_id,c.assigned_user_id,a.connection_type FROM conversations c
       JOIN channel_accounts a ON a.id=c.channel_account_id AND a.organization_id=c.organization_id WHERE c.id=$1 AND c.organization_id=$2`, [id, org]);
     const target = conv.rows[0];
     if (!target) return reply.code(404).send({ error: 'Conversación no encontrada' });
     const existing = async () => {
-      const found = await pool.query<{ conversation_id: string; body: string; send_state: string | null }>('SELECT conversation_id,body,send_state FROM messages WHERE id=$1 AND organization_id=$2', [body.id, org]);
+      const found = await client.query<{ conversation_id: string; body: string; send_state: string | null }>('SELECT conversation_id,body,send_state FROM messages WHERE id=$1 AND organization_id=$2', [body.id, org]);
       return found.rows[0];
     };
     const prior = await existing();
@@ -159,22 +209,24 @@ export function registerAuth(app: FastifyInstance, pool: Pool, whatsapp: WhatsAp
       if (prior.conversation_id !== id || prior.body !== body.text || !prior.send_state) return reply.code(409).send({ error: 'Identificador de envío ya utilizado' });
       return reply.code(202).send({ id: body.id, send_state: prior.send_state });
     }
+    if (target.assigned_user_id !== request.principal!.id) return reply.code(409).send({ error: 'Asignate esta conversación antes de responder.' });
     if (target.connection_type !== 'whatsapp_web' || !/@(s\.whatsapp\.net|lid|g\.us)$/.test(target.external_id)) return reply.code(409).send({ error: 'Este canal no permite enviar mensajes' });
     if (whatsapp.get(target.channel_account_id).state !== 'connected') return reply.code(409).send({ error: 'El canal está desconectado' });
     const externalId = generateMessageIDV2();
-    const inserted = await pool.query(`INSERT INTO messages(id,organization_id,channel_account_id,conversation_id,provider_message_id,direction,message_type,body,occurred_at,send_state)
+    const inserted = await client.query(`INSERT INTO messages(id,organization_id,channel_account_id,conversation_id,provider_message_id,direction,message_type,body,occurred_at,send_state)
       VALUES ($1,$2,$3,$4,$5,'outgoing','text',$6,now(),'sending') ON CONFLICT (id) DO NOTHING RETURNING id`, [body.id, org, target.channel_account_id, id, externalId, body.text]);
     if (!inserted.rowCount) {
       const concurrent = await existing();
       if (!concurrent || concurrent.conversation_id !== id || concurrent.body !== body.text || !concurrent.send_state) return reply.code(409).send({ error: 'Identificador de envío ya utilizado' });
       return reply.code(202).send({ id: body.id, send_state: concurrent.send_state });
     }
-    await pool.query('UPDATE conversations SET last_message_at=GREATEST(COALESCE(last_message_at,now()),now()) WHERE id=$1 AND organization_id=$2', [id, org]);
+    await client.query('UPDATE conversations SET last_message_at=GREATEST(COALESCE(last_message_at,now()),now()) WHERE id=$1 AND organization_id=$2', [id, org]);
     let state = 'submitted';
     try { await whatsapp.sendText(target.channel_account_id, target.external_id, body.text, externalId); }
     catch { state = 'unknown'; request.log.warn({ code: 'whatsapp_send_unconfirmed' }, 'Resultado de envío incierto'); }
-    await pool.query('UPDATE messages SET send_state=$1 WHERE id=$2 AND organization_id=$3', [state, body.id, org]);
+    await client.query('UPDATE messages SET send_state=$1 WHERE id=$2 AND organization_id=$3', [state, body.id, org]);
     return reply.code(202).send({ id: body.id, send_state: state });
+    } finally { try { await client.query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [id]); } finally { client.release(); } }
   });
   app.get('/api/channels', { preHandler: authenticate }, async (request, reply) => {
     if (request.principal!.role !== 'admin') return reply.code(403).send({ error: 'Permiso denegado' });

@@ -121,6 +121,12 @@ Si se intenta conectar un número ya registrado en otro canal de la misma organi
 
 La implementación permite una sola instancia de la API administrando sesiones de WhatsApp a la vez. Los canales marcados como ejemplos son ficticios. La bandeja permite abrir el historial guardado y enviar texto desde un canal de WhatsApp Web conectado; no se garantiza la importación del historial. Los detalles y limitaciones están en [ingesta de WhatsApp Web](docs/whatsapp-ingestion.md). Para probar la recepción de un QR sin vincular una cuenta: `node --env-file=.env --import tsx --test apps/api/test/whatsapp.live.test.ts` (requiere PostgreSQL y acceso a WhatsApp).
 
+## Gestión de conversaciones
+
+En cada conversación se muestran los datos disponibles del contacto o grupo, su responsable y su estado. Los integrantes de la organización pueden asignar o reasignar responsables y cambiar el estado entre abierta, en espera y resuelta; el historial indica quién hizo cada cambio. Las notas internas quedan asociadas a la conversación, son visibles para la organización y no se envían a WhatsApp.
+
+Para responder, la conversación debe estar asignada al usuario que envía. La API comprueba la asignación y espera a que termine un envío antes de aplicar una reasignación. Esto reduce respuestas cruzadas entre operadores del CRM, pero no bloquea otras sesiones del mismo usuario ni respuestas hechas directamente desde WhatsApp. La asignación no cambia automáticamente al recibir mensajes. Ejecutá `npm run db:migrate` antes de iniciar la versión nueva.
+
 ## Organización
 
 ```text

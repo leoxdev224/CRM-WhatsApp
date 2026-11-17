@@ -1,8 +1,9 @@
+import { ConversationDetails } from './ConversationDetails.js';
 import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 
 type Message = { id: string; direction: string; message_type: string; body: string | null; occurred_at: string; sender_external_id: string | null; delivery_status: number | null; send_state: string | null };
-type ChatData = { conversation: { id: string; kind: string; contact_name: string; channel_name: string; channel_phone: string | null; connection_type: string }; messages: Message[]; hasMore: boolean };
+type ChatData = { current_user_id: string; conversation: { id: string; kind: string; contact_name: string; contact_phone: string | null; external_id: string; status: string; assigned_user_id: string | null; channel_name: string; channel_phone: string | null; connection_type: string }; messages: Message[]; hasMore: boolean };
 const types: Record<string, string> = { image: 'Foto', video: 'Video', document: 'Documento', audio: 'Audio', sticker: 'Sticker', location: 'Ubicación', contact: 'Contacto', system: 'Mensaje del sistema' };
 const delivery: Record<number, string> = { 1: 'Pendiente', 2: 'Recibido por WhatsApp', 3: 'Entregado', 4: 'Leído', 5: 'Reproducido' };
 
@@ -92,9 +93,9 @@ export function Chat({ token, id, onBack }: { token: string; id: string; onBack:
     </header>
     {error && <p className="chat-alert" role="alert">{error} <button type="button" onClick={() => setRetry((value) => value + 1)}>Reintentar</button></p>}
     {!data && !error && <p className="chat-empty" role="status">Cargando conversación…</p>}
-    {data && <><div className="chat-history" ref={historyRef} onScroll={(event) => { const el = event.currentTarget; followNewest.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60; }}>{(hasOlder ?? data.hasMore) && <button type="button" className="chat-older" disabled={loadingOlder} onClick={() => void loadOlder()}>{loadingOlder ? 'Cargando…' : 'Cargar mensajes anteriores'}</button>}<MessageList messages={messages} group={data.conversation.kind === 'group'} /></div>
+    {data && <><ConversationDetails token={token} id={id} conversation={data.conversation} currentUserId={data.current_user_id} refresh={() => setRetry((value) => value + 1)} /><div className="chat-history" ref={historyRef} onScroll={(event) => { const el = event.currentTarget; followNewest.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60; }}>{(hasOlder ?? data.hasMore) && <button type="button" className="chat-older" disabled={loadingOlder} onClick={() => void loadOlder()}>{loadingOlder ? 'Cargando…' : 'Cargar mensajes anteriores'}</button>}<MessageList messages={messages} group={data.conversation.kind === 'group'} /></div>
       {sendError && <p className="chat-alert" role="alert">{sendError} {uncertain && <button type="button" onClick={() => { setUncertain(false); setSendError(''); }}>Ya revisé el estado</button>}</p>}
-      {data.conversation.connection_type === 'whatsapp_web' ? <form className="chat-compose" onSubmit={send}><label htmlFor="chat-reply">Tu respuesta</label><div><textarea id="chat-reply" placeholder="Escribí un mensaje…" maxLength={4096} rows={2} value={text} onChange={(event) => setText(event.target.value)} /><button className="button-primary" disabled={busy || uncertain || !text.trim()}>{busy ? 'Enviando…' : 'Enviar mensaje'}</button></div></form> : <p className="chat-empty">Este canal de ejemplo no permite enviar mensajes.</p>}
+      {data.conversation.connection_type === 'whatsapp_web' ? <form className="chat-compose" onSubmit={send}><label htmlFor="chat-reply">Tu respuesta</label><div><textarea id="chat-reply" placeholder="Escribí un mensaje…" maxLength={4096} rows={2} value={text} onChange={(event) => setText(event.target.value)} /><button className="button-primary" disabled={busy || uncertain || !text.trim() || data.conversation.assigned_user_id !== data.current_user_id}>{busy ? 'Enviando…' : 'Enviar mensaje'}</button></div></form> : <p className="chat-empty">Este canal de ejemplo no permite enviar mensajes.</p>}
     </>}
   </section>;
 }
