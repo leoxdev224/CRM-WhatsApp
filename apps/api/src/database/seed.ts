@@ -25,7 +25,7 @@ async function seed() {
   }
 }
 
-void seed().catch((error: unknown) => {
-  console.error(error);
+void seed().catch(() => {
+  console.error('No se pudo completar la operación de base de datos.');
   process.exitCode = 1;
 });

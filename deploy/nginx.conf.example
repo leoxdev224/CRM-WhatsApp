@@ -1,0 +1,28 @@
+# Ejemplo: instalar detrás de un proxy TLS; reemplazar host, rutas y certificados.
+server {
+    listen 80;
+    server_name crm.example.invalid;
+    access_log off;
+    error_log /dev/null crit;
+    return 308 https://$host$request_uri;
+}
+server {
+    listen 443 ssl;
+    server_name crm.example.invalid;
+    ssl_certificate /etc/nginx/tls/crm-fullchain.pem;
+    ssl_certificate_key /etc/nginx/tls/crm-private.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    access_log off;
+    error_log /dev/null crit;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy no-referrer always;
+    root /srv/crm/web;
+    location /api/ {
+        proxy_pass http://127.0.0.1:3002;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_cache off;
+    }
+    location / { try_files $uri $uri/ /index.html; }
+}

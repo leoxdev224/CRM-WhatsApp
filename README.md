@@ -63,11 +63,13 @@ Para comprobar la API compilada: `npm run start --workspace=@crm-whatsapp/api`. 
 Los usuarios ficticios no tienen contraseña inicial. Después de `npm run db:seed`, asigná una contraseña local al administrador desde PowerShell (no uses datos reales):
 
 ```powershell
+$env:CRM_AUDIT_ACTOR_ID = '11111111-1111-4111-8111-111111111111' # administrador demo responsable
 $env:CRM_USER_EMAIL = 'admin@example.test'
 $env:CRM_USER_PASSWORD = Read-Host 'Contraseña local (mínimo 12 caracteres)'
 npm run set-password --workspace=@crm-whatsapp/api
 Remove-Item Env:CRM_USER_PASSWORD
 Remove-Item Env:CRM_USER_EMAIL
+Remove-Item Env:CRM_AUDIT_ACTOR_ID
 ```
 
 `Read-Host` muestra lo escrito en pantalla; usalo únicamente para desarrollo local. El comando actualiza el hash y revoca las sesiones anteriores. El formulario conserva el token en el almacenamiento de la pestaña para mantener la sesión al recargar; al cerrar la pestaña se pierde. Los tokens vencen a las ocho horas y el cierre de sesión los revoca. El token es accesible al JavaScript de la página, por lo que debe protegerse la aplicación contra scripts no confiables antes de usarla en producción.
@@ -80,6 +82,7 @@ Para registrar o restablecer el segundo factor de un administrador, desde una te
 $env:CRM_USER_EMAIL = 'admin@example.test'
 npm run enroll-mfa --workspace=@crm-whatsapp/api
 Remove-Item Env:CRM_USER_EMAIL
+Remove-Item Env:CRM_AUDIT_ACTOR_ID
 ```
 
 El comando muestra una clave secreta para agregar manualmente en la aplicación autenticadora y pide confirmar un código antes de activarla; no compartas la pantalla ni la salida. Una vez activado, esperá al siguiente código para iniciar sesión: cada código se acepta una sola vez. El restablecimiento requiere acceso administrativo al servidor y revoca las sesiones existentes. No hay recuperación automática.
@@ -126,6 +129,8 @@ La implementación permite una sola instancia de la API administrando sesiones d
 En cada conversación se muestran los datos disponibles del contacto o grupo, su responsable y su estado. Los integrantes de la organización pueden asignar o reasignar responsables y cambiar el estado entre abierta, en espera y resuelta; el historial indica quién hizo cada cambio. Las notas internas quedan asociadas a la conversación, son visibles para la organización y no se envían a WhatsApp.
 
 Para responder, la conversación debe estar asignada al usuario que envía. La API comprueba la asignación y espera a que termine un envío antes de aplicar una reasignación. Esto reduce respuestas cruzadas entre operadores del CRM, pero no bloquea otras sesiones del mismo usuario ni respuestas hechas directamente desde WhatsApp. La asignación no cambia automáticamente al recibir mensajes. Ejecutá `npm run db:migrate` antes de iniciar la versión nueva.
+
+La política propuesta de seguridad, auditoría, retención y copias cifradas está en [seguridad y operación](docs/security-operations.md).
 
 ## Organización
 
