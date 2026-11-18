@@ -130,7 +130,7 @@ En cada conversación se muestran los datos disponibles del contacto o grupo, su
 
 Para responder, la conversación debe estar asignada al usuario que envía. La API comprueba la asignación y espera a que termine un envío antes de aplicar una reasignación. Esto reduce respuestas cruzadas entre operadores del CRM, pero no bloquea otras sesiones del mismo usuario ni respuestas hechas directamente desde WhatsApp. La asignación no cambia automáticamente al recibir mensajes. Ejecutá `npm run db:migrate` antes de iniciar la versión nueva.
 
-La política propuesta de seguridad, auditoría, retención y copias cifradas está en [seguridad y operación](docs/security-operations.md).
+La política propuesta de seguridad, auditoría, retención y copias cifradas está en [seguridad y operación](docs/security-operations.md). Las pruebas y pendientes de acceso, permisos y doble factor están en [validación de acceso](docs/validacion-acceso.md).
 
 ## Organización
 

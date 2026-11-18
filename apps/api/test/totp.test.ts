@@ -18,3 +18,10 @@ test('el secreto se cifra y no se puede alterar', () => {
   const changed = data!.slice(-2) === '00' ? '01' : '00';
   assert.throws(() => decryptSecret(`${iv}:${tag}:${data!.slice(0, -2)}${changed}`));
 });
+
+test('TOTP coincide con los vectores de interoperabilidad RFC 6238', () => {
+  const secret = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
+  for (const [seconds, expected] of [[59, '287082'], [1111111109, '081804'], [1111111111, '050471'], [1234567890, '005924'], [2000000000, '279037'], [20000000000, '353130']] as const) {
+    assert.equal(codeAt(secret, Math.floor(seconds / 30)), expected);
+  }
+});
