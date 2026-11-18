@@ -10,8 +10,8 @@ const app = buildApp(pool);
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, () => {
-    void app.close().catch((error: unknown) => {
-      app.log.error(error);
+    void app.close().catch(() => {
+      app.log.error({ code: 'shutdown_failed' }, 'Error al detener la API');
       process.exitCode = 1;
     });
   });
@@ -22,8 +22,8 @@ try {
     host: process.env.API_HOST ?? '127.0.0.1',
     port: Number(process.env.API_PORT ?? 3002),
   });
-} catch (error) {
-  app.log.error(error);
+} catch {
+  app.log.error({ code: 'startup_failed' }, 'No se pudo iniciar la API');
   await app.close();
   process.exitCode = 1;
 }

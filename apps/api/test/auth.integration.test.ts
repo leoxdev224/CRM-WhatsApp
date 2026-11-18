@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { randomUUID } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { buildApp } from '../src/app.js';
 import { hashPassword } from '../src/auth/password.js';
@@ -12,6 +14,7 @@ test('sesiones y permisos aíslan organizaciones y roles', async (t) => {
   const pool = new pg.Pool({ connectionTimeoutMillis: 3000 });
   const app = buildApp(pool);
   const org = randomUUID();
+  const otherOrg = randomUUID();
   const operator = randomUUID();
   const admin = randomUUID();
   const email = `${operator}@example.test`;
@@ -20,9 +23,10 @@ test('sesiones y permisos aíslan organizaciones y roles', async (t) => {
   process.env.MFA_ENCRYPTION_KEY = 'bb'.repeat(32);
   process.env.WHATSAPP_SESSION_KEY = 'cc'.repeat(32);
   t.after(async () => {
+    await pool.query('DELETE FROM security_audit WHERE organization_id = ANY($1::uuid[])', [[org, otherOrg]]);
     await pool.query('DELETE FROM channel_accounts WHERE organization_id = $1', [org]);
     await pool.query('DELETE FROM users WHERE id = ANY($1::uuid[])', [[operator, admin]]);
-    await pool.query('DELETE FROM organizations WHERE id = $1', [org]);
+    await pool.query('DELETE FROM organizations WHERE id = ANY($1::uuid[])', [[org, otherOrg]]);
     await app.close();
   });
   await pool.query('INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3)', [org, 'Test', org]);
@@ -46,6 +50,15 @@ test('sesiones y permisos aíslan organizaciones y roles', async (t) => {
   const adminLogin = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: adminEmail, password, code } });
   assert.equal(adminLogin.statusCode, 200);
   const adminHeaders = { authorization: `Bearer ${adminLogin.json().token}` };
+  assert.equal((await app.inject({ method: 'GET', url: '/api/audit', headers })).statusCode, 403);
+  await pool.query("INSERT INTO security_audit (organization_id,action,http_status) VALUES ($1,'foreign.secret',200)", [otherOrg]);
+  const audit = await app.inject({ method: 'GET', url: '/api/audit', headers: adminHeaders });
+  assert.equal(audit.statusCode, 200);
+  assert.ok(audit.json().events.some((event: { action: string; actor_id: string }) => event.action === 'login' && event.actor_id === admin));
+  assert.ok(!audit.body.includes(password));
+  assert.ok(!audit.body.includes('foreign.secret'));
+  assert.equal((await app.inject({ method: 'GET', url: '/api/audit?before=abc', headers: adminHeaders })).statusCode, 400);
+
   assert.equal((await app.inject({ method: 'GET', url: '/api/channels', headers: adminHeaders })).statusCode, 200);
   const created = await app.inject({ method: 'POST', url: '/api/channels', headers: adminHeaders, payload: { displayName: 'Prueba QR' } });
   assert.equal(created.statusCode, 201);
@@ -53,6 +66,10 @@ test('sesiones y permisos aíslan organizaciones y roles', async (t) => {
   assert.equal((await app.inject({ method: 'POST', url: `/api/channels/${channel}/connect`, headers })).statusCode, 403);
   assert.equal((await app.inject({ method: 'POST', url: `/api/channels/${channel}/disconnect`, headers })).statusCode, 403);
   assert.equal((await app.inject({ method: 'POST', url: `/api/channels/${channel}/disconnect`, headers: adminHeaders })).statusCode, 204);
+  const channelAudit = await pool.query("SELECT action,actor_id FROM security_audit WHERE organization_id=$1 AND action IN ('channel.create','channel.disconnect') AND http_status BETWEEN 200 AND 299 ORDER BY id", [org]);
+  assert.deepEqual(channelAudit.rows.map((row) => row.action), ['channel.create', 'channel.disconnect']);
+  assert.ok(channelAudit.rows.every((row) => row.actor_id === admin));
+
   assert.equal((await pool.query<{ connection_status: string }>('SELECT connection_status FROM channel_accounts WHERE id=$1', [channel])).rows[0]?.connection_status, 'revoked');
   assert.equal((await app.inject({ method: 'GET', url: `/api/channels/${channel}/connection`, headers })).statusCode, 403);
   assert.equal((await app.inject({ method: 'GET', url: '/api/channels/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/connection', headers: adminHeaders })).statusCode, 404);
@@ -84,4 +101,11 @@ test('sesiones y permisos aíslan organizaciones y roles', async (t) => {
   await pool.query("UPDATE users SET role = 'operator' WHERE id = $1", [operator]);
   assert.equal((await app.inject({ method: 'POST', url: '/api/auth/logout', headers })).statusCode, 204);
   assert.equal((await app.inject({ method: 'GET', url: '/api/conversations', headers })).statusCode, 401);
+  const command = fileURLToPath(new URL('../src/auth/set-password.ts', import.meta.url));
+  const env = { ...process.env, CRM_USER_EMAIL: email, CRM_USER_PASSWORD: password, CRM_AUDIT_ACTOR_ID: admin };
+  const reset = spawnSync(process.execPath, ['--import', 'tsx', command], { env, encoding: 'utf8' });
+  assert.equal(reset.status, 0, reset.stderr);
+  assert.equal((await pool.query("SELECT 1 FROM security_audit WHERE organization_id=$1 AND actor_id=$2 AND target_id=$3 AND action='credential.password_reset'", [org, admin, operator])).rowCount, 1);
+  const rejected = spawnSync(process.execPath, ['--import', 'tsx', command], { env: { ...env, CRM_AUDIT_ACTOR_ID: randomUUID() }, encoding: 'utf8' });
+  assert.notEqual(rejected.status, 0);
 });

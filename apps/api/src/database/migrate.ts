@@ -51,7 +51,7 @@ async function migrate() {
   }
 }
 
-void migrate().catch((error: unknown) => {
-  console.error(error);
+void migrate().catch(() => {
+  console.error('No se pudo completar la operación de base de datos.');
   process.exitCode = 1;
 });

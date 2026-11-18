@@ -18,6 +18,24 @@ const sessionToken = (request: FastifyRequest) => {
 
 export function registerAuth(app: FastifyInstance, pool: Pool, whatsapp: WhatsAppManager) {
   app.decorateRequest('principal', null);
+  const auditedRoutes: Record<string, string> = {
+    'POST /api/auth/login': 'login', 'POST /api/auth/logout': 'logout',
+    'POST /api/channels': 'channel.create', 'POST /api/channels/:id/connect': 'channel.connect',
+    'POST /api/channels/:id/disconnect': 'channel.disconnect',
+    'PATCH /api/conversations/:id': 'conversation.update', 'POST /api/conversations/:id/notes': 'note.create',
+    'POST /api/conversations/:id/messages': 'message.send', 'GET /api/audit': 'audit.read',
+  };
+  app.addHook('onSend', async (request, reply, payload) => {
+    const action = auditedRoutes[request.method + ' ' + request.routeOptions.url];
+    if (!action || (action === 'login' && reply.statusCode >= 200 && reply.statusCode < 300)) return payload;
+    const candidate = (request.params as { id?: string } | null)?.id;
+    const target = candidate && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(candidate) ? candidate : null;
+    try {
+      await pool.query('INSERT INTO security_audit (organization_id,actor_id,action,target_id,http_status) VALUES ($1,$2,$3,$4,$5)',
+        [request.principal?.organization_id ?? null, request.principal?.id ?? null, action, target, reply.statusCode]);
+    } catch { request.log.error({ code: 'security_audit_write_failed' }, 'No se pudo guardar la auditoría'); }
+    return payload;
+  });
 
   app.post('/api/auth/login', async (request, reply) => {
     const body = request.body as { email?: unknown; password?: unknown; code?: unknown } | null;
@@ -62,8 +80,10 @@ export function registerAuth(app: FastifyInstance, pool: Pool, whatsapp: WhatsAp
       if (counter !== null) await client.query('UPDATE users SET mfa_last_counter = $1 WHERE id = $2', [counter, user.id]);
       const token = randomBytes(32).toString('hex');
       await client.query("INSERT INTO auth_sessions (token_hash, user_id, expires_at, mfa_verified) VALUES ($1, $2, now() + interval '8 hours', $3)", [digest(token), user.id, counter !== null]);
+      await client.query("INSERT INTO security_audit (organization_id,actor_id,action,http_status) VALUES ($1,$2,'login',200)", [user.organization_id, user.id]);
       await client.query('DELETE FROM auth_login_attempts WHERE identity_hash = $1', [key]);
       await client.query('COMMIT');
+      request.principal = user;
       reply.header('Cache-Control', 'no-store');
       return { token, user: { id: user.id, organizationId: user.organization_id, role: user.role, displayName: user.display_name } };
     } catch (error) {
@@ -81,11 +101,26 @@ export function registerAuth(app: FastifyInstance, pool: Pool, whatsapp: WhatsAp
         AND (u.role <> 'admin' OR (u.mfa_secret_encrypted IS NOT NULL AND s.mfa_verified))`, [digest(token)]);
     if (!result.rows[0]) { await reply.code(401).send({ error: 'Sesión inválida o vencida' }); return; }
     request.principal = result.rows[0];
+    const action = auditedRoutes[request.method + ' ' + request.routeOptions.url];
+    if (action && action !== 'audit.read') {
+      const candidate = (request.params as { id?: string } | null)?.id;
+      const target = candidate && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(candidate) ? candidate : null;
+      try { await pool.query('INSERT INTO security_audit (organization_id,actor_id,action,target_id,http_status) VALUES ($1,$2,$3,$4,100)', [request.principal.organization_id,request.principal.id,action,target]); }
+      catch { request.log.error({ code: 'security_audit_write_failed' }, 'No se pudo guardar la auditoría'); await reply.code(503).send({ error: 'Auditoría no disponible' }); }
+    }
   }
   app.get('/api/auth/me', { preHandler: authenticate }, async (request) => ({ user: request.principal }));
   app.post('/api/auth/logout', { preHandler: authenticate }, async (request, reply) => {
     await pool.query('DELETE FROM auth_sessions WHERE token_hash = $1', [digest(sessionToken(request)!)]);
     return reply.code(204).send();
+  });
+  app.get('/api/audit', { preHandler: authenticate }, async (request, reply) => {
+    if (request.principal!.role !== 'admin') return reply.code(403).send({ error: 'Permiso denegado' });
+    const { before = '' } = request.query as { before?: unknown };
+    if (typeof before !== 'string' || (before !== '' && !/^[1-9][0-9]{0,17}$/.test(before))) return reply.code(400).send({ error: 'Solicitud inválida' });
+    const result = await pool.query('SELECT id,actor_id,action,target_id,http_status,created_at FROM security_audit WHERE organization_id=$1 AND ($2=\'\' OR id < NULLIF($2,\'\')::bigint) ORDER BY id DESC LIMIT 100', [request.principal!.organization_id, before]);
+    reply.header('Cache-Control', 'no-store');
+    return { events: result.rows };
   });
   app.get('/api/conversations', { preHandler: authenticate }, async (request, reply) => {
     const query = request.query as Record<string, unknown>;

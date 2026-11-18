@@ -5,10 +5,22 @@ import { WhatsAppManager } from './whatsapp/manager.js';
 import { WhatsAppIngestion } from './whatsapp/ingestion.js';
 
 export function buildApp(pool: Pool) {
-  const app = Fastify({ logger: true });
+  const app = Fastify({ logger: true, logController: new Fastify.LogController({ disableRequestLogging: true }) });
 
-  pool.on('error', (error) => {
-    app.log.error({ err: error }, 'Error en una conexión PostgreSQL inactiva');
+  pool.on('error', () => {
+    app.log.error({ code: 'database_pool_error' }, 'Error en una conexión PostgreSQL inactiva');
+  });
+
+  app.setErrorHandler((error, request, reply) => {
+    const code = typeof error === 'object' && error !== null && 'statusCode' in error && typeof error.statusCode === 'number' ? error.statusCode : 500;
+    const status = code >= 400 && code < 500 ? code : 500;
+    request.log.error({ code: 'request_failed', status }, 'Error al procesar solicitud');
+    void reply.code(status).send({ error: status === 500 ? 'Error interno' : 'Solicitud inválida' });
+  });
+
+  app.addHook('onSend', async (request, reply, payload) => {
+    if (request.url.startsWith('/api/')) reply.header('Cache-Control', 'no-store');
+    return payload;
   });
 
   app.get('/api/health', async () => ({ status: 'ok' }));
@@ -22,8 +34,8 @@ export function buildApp(pool: Pool) {
     try {
       await pool.query('SELECT 1');
       return { status: 'ok', database: 'connected' };
-    } catch (error) {
-      request.log.error({ err: error }, 'PostgreSQL no está disponible');
+    } catch {
+      request.log.error({ code: 'database_unavailable' }, 'PostgreSQL no está disponible');
       return reply.code(503).send({ status: 'error', database: 'unavailable' });
     }
   });
