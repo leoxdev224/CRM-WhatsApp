@@ -11,7 +11,7 @@ function hasSavedSession() {
   try { return !!sessionStorageOrNull()?.getItem(sessionKey); } catch { return false; }
 }
 
-type Channel = { id: string; phone_number: string | null; display_name: string; connection_status: string; connection_type?: string };
+type Channel = { id: string; phone_number: string | null; display_name: string; connection_status: string; connection_type?: string; proxy_label?: string | null; proxy_exit_ip?: string | null; proxy_checked_at?: string | null; reconnects?: number; last_error?: string | null; next_retry_at?: number | null };
 
 export function ChannelList({ channels }: { channels: Channel[] }) {
   const states: Record<string, string> = { awaiting_qr: 'Pendiente', starting: 'Conectando', qr: 'Esperando QR', connected: 'Conectado', disconnected: 'Desconectado', revoked: 'Revocado', duplicate: 'Número duplicado', duplicate_cleanup_failed: 'Revisión necesaria' };
@@ -29,6 +29,8 @@ function ChannelManager({ token, channels, refresh }: { token: string; channels:
   const [active, setActive] = useState<string | null>(null);
   const [connection, setConnection] = useState<{ status: string; qr: string | null } | null>(null);
   const [message, setMessage] = useState('');
+  const [proxyDraft, setProxyDraft] = useState<Record<string, string>>({});
+  const [proxyBusy, setProxyBusy] = useState<string | null>(null);
   const headers = { Authorization: `Bearer ${token}` };
 
   useEffect(() => {
@@ -74,6 +76,19 @@ function ChannelManager({ token, channels, refresh }: { token: string; channels:
       setActive(null); setConnection(null); await refresh();
     } catch { setMessage('No se pudo desvincular el canal.'); }
   }
+  async function saveProxy(id: string, proxyUrl: string | null) {
+    if (proxyUrl === null && !window.confirm('¿Quitar el proxy? El canal volverá a salir por la IP del servidor.')) return;
+    setMessage(''); setProxyBusy(id);
+    try {
+      const response = await fetch(`/api/channels/${id}/proxy`, { method: 'PUT', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ proxyUrl }) });
+      const data = await response.json().catch(() => ({})) as { error?: string; proxy?: { exitIp: string } | null };
+      if (!response.ok) throw new Error(data.error ?? 'No se pudo guardar el proxy.');
+      setProxyDraft((draft) => ({ ...draft, [id]: '' }));
+      setMessage(data.proxy ? `Proxy guardado. IP de salida: ${data.proxy.exitIp}` : 'Proxy quitado.');
+      await refresh();
+    } catch (error) { setMessage(error instanceof Error ? error.message : 'No se pudo guardar el proxy.'); }
+    finally { setProxyBusy(null); }
+  }
   return <section className="channel-section channel-connect" aria-labelledby="manage-title"><h2 id="manage-title">Vincular WhatsApp Web</h2>
     <p>Integración no oficial. Probá primero con un número de prueba.</p>
     <form className="channel-form" onSubmit={create}><label>Nombre del canal <input placeholder="Ej. Atención principal" required maxLength={100} value={name} onChange={(event) => setName(event.target.value)} /></label><button className="button-primary">Agregar canal</button></form>
@@ -81,6 +96,17 @@ function ChannelManager({ token, channels, refresh }: { token: string; channels:
       <div className="manage-channel"><div><strong>{channel.display_name}</strong><small>{channel.phone_number ?? 'Sin número vinculado'} · {active === channel.id ? connection?.status ?? 'starting' : channel.connection_status}</small></div>
       <div className="manage-actions"><button type="button" onClick={() => void connect(channel.id)}>Conectar / ver QR</button>{' '}
       <button type="button" onClick={() => void disconnect(channel.id)}>Desvincular</button></div></div>
+      <div className="channel-proxy">
+        <small>{channel.proxy_label ? <>Proxy: {channel.proxy_label} · IP de salida: {channel.proxy_exit_ip ?? 'sin verificar'}</> : 'Sin proxy: sale por la IP del servidor'}
+          {!!channel.reconnects && <> · Reconexiones: {channel.reconnects}</>}
+          {channel.last_error === 'proxy_unavailable' && <> · <strong>Proxy sin respuesta</strong></>}
+          {channel.next_retry_at && <> · Reintento {new Date(channel.next_retry_at).toLocaleTimeString()}</>}</small>
+        <form className="channel-form" onSubmit={(event) => { event.preventDefault(); void saveProxy(channel.id, proxyDraft[channel.id] ?? ''); }}>
+          <label>Proxy del canal <input type="password" autoComplete="off" placeholder="socks5://usuario:clave@host:puerto" maxLength={500} value={proxyDraft[channel.id] ?? ''} onChange={(event) => setProxyDraft((draft) => ({ ...draft, [channel.id]: event.target.value }))} /></label>
+          <button disabled={proxyBusy === channel.id || !(proxyDraft[channel.id] ?? '').trim()}>{proxyBusy === channel.id ? 'Probando…' : 'Probar y guardar'}</button>
+          {channel.proxy_label && <button type="button" disabled={proxyBusy === channel.id} onClick={() => void saveProxy(channel.id, null)}>Quitar proxy</button>}
+        </form>
+      </div>
       {active === channel.id && connection?.qr && <div><p>En WhatsApp: Dispositivos vinculados → Vincular dispositivo.</p><img src={connection.qr} alt="Código QR para vincular WhatsApp" /></div>}
       {active === channel.id && connection?.status === 'duplicate' && <p role="alert">Este número ya está registrado en otro canal de esta organización. Se solicitó desvincular la sesión duplicada; comprobá Dispositivos vinculados en el teléfono.</p>}
       {active === channel.id && connection?.status === 'duplicate_cleanup_failed' && <p role="alert">Este número ya está registrado en otro canal. No se pudo completar la limpieza: revisá y desvinculá el dispositivo duplicado desde WhatsApp antes de volver a intentar.</p>}

@@ -6,6 +6,7 @@ import { decryptSecret, verifyCode } from './totp.js';
 import QRCode from 'qrcode';
 import type { WhatsAppManager } from '../whatsapp/manager.js';
 import { generateMessageIDV2 } from '@whiskeysockets/baileys';
+import { checkExitIp, closeProxyAgents, createProxyAgents, encryptProxy, maskProxy, parseProxyUrl } from '../whatsapp/proxy.js';
 
 type Principal = { id: string; organization_id: string; role: 'admin' | 'operator'; display_name: string };
 declare module 'fastify' { interface FastifyRequest { principal: Principal | null } }
@@ -21,7 +22,7 @@ export function registerAuth(app: FastifyInstance, pool: Pool, whatsapp: WhatsAp
   const auditedRoutes: Record<string, string> = {
     'POST /api/auth/login': 'login', 'POST /api/auth/logout': 'logout',
     'POST /api/channels': 'channel.create', 'POST /api/channels/:id/connect': 'channel.connect',
-    'POST /api/channels/:id/disconnect': 'channel.disconnect',
+    'POST /api/channels/:id/disconnect': 'channel.disconnect', 'PUT /api/channels/:id/proxy': 'channel.proxy.update',
     'PATCH /api/conversations/:id': 'conversation.update', 'POST /api/conversations/:id/notes': 'note.create',
     'POST /api/conversations/:id/messages': 'message.send', 'GET /api/audit': 'audit.read',
   };
@@ -265,8 +266,13 @@ export function registerAuth(app: FastifyInstance, pool: Pool, whatsapp: WhatsAp
   });
   app.get('/api/channels', { preHandler: authenticate }, async (request, reply) => {
     if (request.principal!.role !== 'admin') return reply.code(403).send({ error: 'Permiso denegado' });
-    const result = await pool.query<{ id: string; connection_type: string; connection_status: string }>('SELECT id, phone_number, display_name, connection_status, connection_type FROM channel_accounts WHERE organization_id = $1', [request.principal!.organization_id]);
-    return { channels: result.rows.map((channel) => channel.connection_type === 'whatsapp_web' ? { ...channel, connection_status: whatsapp.get(channel.id).state === 'disconnected' && channel.connection_status === 'revoked' ? 'revoked' : whatsapp.get(channel.id).state } : channel) };
+    const result = await pool.query<{ id: string; connection_type: string; connection_status: string }>('SELECT id, phone_number, display_name, connection_status, connection_type, proxy_label, proxy_exit_ip, proxy_checked_at FROM channel_accounts WHERE organization_id = $1', [request.principal!.organization_id]);
+    return { channels: result.rows.map((channel) => {
+      if (channel.connection_type !== 'whatsapp_web') return channel;
+      const live = whatsapp.get(channel.id);
+      return { ...channel, connection_status: live.state === 'disconnected' && channel.connection_status === 'revoked' ? 'revoked' : live.state,
+        reconnects: live.reconnects, last_error: live.lastError, next_retry_at: live.nextRetryAt };
+    }) };
   });
   async function admin(request: FastifyRequest, reply: FastifyReply) {
     await authenticate(request, reply);
@@ -291,7 +297,31 @@ export function registerAuth(app: FastifyInstance, pool: Pool, whatsapp: WhatsAp
   app.get('/api/channels/:id/connection', { preHandler: [admin, ownChannel] }, async (request, reply) => {
     const result = whatsapp.get((request.params as { id: string }).id);
     reply.header('Cache-Control', 'no-store');
-    return { status: result.state, qr: result.qr ? await QRCode.toDataURL(result.qr, { errorCorrectionLevel: 'M' }) : null };
+    return { status: result.state, qr: result.qr ? await QRCode.toDataURL(result.qr, { errorCorrectionLevel: 'M' }) : null,
+      exitIp: result.exitIp, reconnects: result.reconnects, lastError: result.lastError, nextRetryAt: result.nextRetryAt };
+  });
+  // Asigna o quita el proxy de salida de un canal. Se prueba antes de guardar y se guarda cifrado.
+  // Solo con el canal detenido, para no cambiar la IP de una sesión activa.
+  app.put('/api/channels/:id/proxy', { preHandler: [admin, ownChannel] }, async (request, reply) => {
+    const id = (request.params as { id: string }).id;
+    const body = request.body as { proxyUrl?: unknown } | null;
+    if (whatsapp.isActive(id)) return reply.code(409).send({ error: 'Desconectá el canal antes de cambiar su proxy.' });
+    if (body?.proxyUrl === null) {
+      await pool.query('UPDATE channel_accounts SET proxy_encrypted=NULL, proxy_label=NULL, proxy_exit_ip=NULL, proxy_checked_at=NULL WHERE id=$1', [id]);
+      return reply.code(200).send({ proxy: null });
+    }
+    const config = typeof body?.proxyUrl === 'string' ? parseProxyUrl(body.proxyUrl) : null;
+    if (!config) return reply.code(400).send({ error: 'Proxy inválido. Formato: socks5://usuario:clave@host:puerto o http://usuario:clave@host:puerto' });
+    let exitIp: string;
+    const agents = createProxyAgents(config);
+    try { exitIp = await checkExitIp(agents); }
+    catch { return reply.code(422).send({ error: 'El proxy no respondió. Revisá host, puerto y credenciales.' }); }
+    finally { await closeProxyAgents(agents); }
+    let encrypted: string;
+    try { encrypted = encryptProxy(config, id); }
+    catch { return reply.code(503).send({ error: 'Falta configurar WHATSAPP_SESSION_KEY en el servidor.' }); }
+    await pool.query('UPDATE channel_accounts SET proxy_encrypted=$2, proxy_label=$3, proxy_exit_ip=$4, proxy_checked_at=now() WHERE id=$1', [id, encrypted, maskProxy(config), exitIp]);
+    return reply.code(200).send({ proxy: { label: maskProxy(config), exitIp } });
   });
   app.post('/api/channels/:id/disconnect', { preHandler: [admin, ownChannel] }, async (request, reply) => {
     try { await whatsapp.disconnect((request.params as { id: string }).id); return reply.code(204).send(); }
