@@ -74,7 +74,7 @@ test('sesiones y permisos aíslan organizaciones y roles', async (t) => {
   assert.equal((await app.inject({ method: 'GET', url: `/api/channels/${channel}/connection`, headers })).statusCode, 403);
   assert.equal((await app.inject({ method: 'GET', url: '/api/channels/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/connection', headers: adminHeaders })).statusCode, 404);
   const status = await app.inject({ method: 'GET', url: `/api/channels/${channel}/connection`, headers: adminHeaders });
-  assert.deepEqual(status.json(), { status: 'disconnected', qr: null });
+  assert.deepEqual(status.json(), { status: 'disconnected', qr: null, exitIp: null, reconnects: 0, lastError: null, nextRetryAt: null });
   assert.equal(status.headers['cache-control'], 'no-store');
   const store = await createAuthStore(pool, channel);
   await store.state.keys.set({ 'lid-mapping': { example: 'contenido-privado' } });
